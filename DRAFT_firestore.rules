@@ -1,0 +1,236 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Validation Blueprints
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'preferredTheme', 'targetLanguage', 'proficiencyLevel', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'preferredTheme', 'targetLanguage', 'proficiencyLevel', 'updatedAt'])
+        && data.uid is string && isValidId(data.uid) && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && data.preferredTheme is string && data.preferredTheme in ['light', 'dark']
+        && data.targetLanguage is string && data.targetLanguage.size() >= 1 && data.targetLanguage.size() <= 60
+        && data.proficiencyLevel is string && data.proficiencyLevel in ['Beginner', 'Intermediate', 'Advanced']
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data) {
+      return data.keys().hasAll(['uid', 'email', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'updatedAt'])
+        && data.uid is string && isValidId(data.uid) && data.uid == request.auth.uid
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 320
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatThread(data) {
+      return data.keys().hasAll(['ownerId', 'title', 'modelMode', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'title', 'modelMode', 'createdAt', 'updatedAt'])
+        && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.modelMode is string && data.modelMode in ['fast', 'balanced', 'thinking', 'vision']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessage(data, threadId) {
+      return data.keys().hasAll(['ownerId', 'threadId', 'role', 'content', 'modelUsed', 'hasImage', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'threadId', 'role', 'content', 'modelUsed', 'hasImage', 'createdAt'])
+        && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
+        && data.threadId is string && isValidId(data.threadId) && data.threadId == threadId
+        && data.role is string && data.role in ['user', 'assistant']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 25000
+        && data.modelUsed is string && data.modelUsed.size() >= 1 && data.modelUsed.size() <= 64
+        && data.hasImage is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidVocabItem(data) {
+      return data.keys().hasAll(['ownerId', 'language', 'level', 'term', 'translation', 'phonetic', 'exampleSentence', 'exampleTranslation', 'mastered', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'language', 'level', 'term', 'translation', 'phonetic', 'exampleSentence', 'exampleTranslation', 'mastered', 'createdAt'])
+        && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
+        && data.language is string && data.language.size() >= 1 && data.language.size() <= 60
+        && data.level is string && data.level in ['Beginner', 'Intermediate', 'Advanced']
+        && data.term is string && data.term.size() >= 1 && data.term.size() <= 160
+        && data.translation is string && data.translation.size() >= 1 && data.translation.size() <= 200
+        && data.phonetic is string && data.phonetic.size() <= 200
+        && data.exampleSentence is string && data.exampleSentence.size() <= 400
+        && data.exampleTranslation is string && data.exampleTranslation.size() <= 400
+        && data.mastered is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidStudyNote(data) {
+      return data.keys().hasAll(['ownerId', 'subject', 'title', 'summaryMarkdown', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'subject', 'title', 'summaryMarkdown', 'createdAt'])
+        && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
+        && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 80
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.summaryMarkdown is string && data.summaryMarkdown.size() >= 1 && data.summaryMarkdown.size() <= 25000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidQuizAttempt(data) {
+      return data.keys().hasAll(['ownerId', 'topic', 'difficulty', 'score', 'totalQuestions', 'summaryText', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'topic', 'difficulty', 'score', 'totalQuestions', 'summaryText', 'createdAt'])
+        && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
+        && data.topic is string && data.topic.size() >= 1 && data.topic.size() <= 140
+        && data.difficulty is string && data.difficulty in ['Beginner', 'Intermediate', 'Advanced']
+        && data.score is int && data.score >= 0 && data.score <= 50
+        && data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 50
+        && data.score <= data.totalQuestions
+        && data.summaryText is string && data.summaryText.size() <= 4000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCodeSnippet(data) {
+      return data.keys().hasAll(['ownerId', 'title', 'language', 'code', 'lastOutput', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'title', 'language', 'code', 'lastOutput', 'createdAt', 'updatedAt'])
+        && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.language is string && data.language.size() >= 1 && data.language.size() <= 32
+        && data.code is string && data.code.size() <= 40000
+        && data.lastOutput is string && data.lastOutput.size() <= 10000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Users & Isolated Private PII
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow create: if isValidId(userId) && isVerifiedUser() && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerifiedUser() && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'preferredTheme', 'targetLanguage', 'proficiencyLevel', 'updatedAt']);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(docId) && isVerifiedUser() && isOwner(userId)
+          && isValidUserPrivateInfo(incoming())
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId) && isValidId(docId) && isVerifiedUser() && isOwner(userId)
+          && isValidUserPrivateInfo(incoming())
+          && incoming().uid == existing().uid
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+      }
+    }
+
+    // Chat Threads & Messages (Master Gate)
+    match /chatThreads/{threadId} {
+      allow get: if isValidId(threadId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(threadId) && isVerifiedUser()
+        && isValidChatThread(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(threadId) && isVerifiedUser()
+        && isValidChatThread(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'modelMode', 'updatedAt']);
+      allow delete: if isValidId(threadId) && isSignedIn() && existing().ownerId == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow get: if isValidId(threadId) && isValidId(messageId) && isSignedIn()
+          && existing().ownerId == request.auth.uid
+          && get(/databases/$(database)/documents/chatThreads/$(threadId)).data.ownerId == request.auth.uid;
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(threadId) && isValidId(messageId) && isVerifiedUser()
+          && isValidChatMessage(incoming(), threadId)
+          && incoming().createdAt == request.time
+          && get(/databases/$(database)/documents/chatThreads/$(threadId)).data.ownerId == request.auth.uid;
+        allow delete: if isValidId(threadId) && isValidId(messageId) && isSignedIn()
+          && existing().ownerId == request.auth.uid
+          && get(/databases/$(database)/documents/chatThreads/$(threadId)).data.ownerId == request.auth.uid;
+      }
+    }
+
+    // Vocabulary Items
+    match /vocabItems/{itemId} {
+      allow get: if isValidId(itemId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(itemId) && isVerifiedUser()
+        && isValidVocabItem(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(itemId) && isVerifiedUser()
+        && isValidVocabItem(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['mastered']);
+      allow delete: if isValidId(itemId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    // Study Notes
+    match /studyNotes/{noteId} {
+      allow get: if isValidId(noteId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(noteId) && isVerifiedUser()
+        && isValidStudyNote(incoming())
+        && incoming().createdAt == request.time;
+      allow delete: if isValidId(noteId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    // Quiz Attempts
+    match /quizAttempts/{attemptId} {
+      allow get: if isValidId(attemptId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(attemptId) && isVerifiedUser()
+        && isValidQuizAttempt(incoming())
+        && incoming().createdAt == request.time;
+      allow delete: if isValidId(attemptId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    // Code Snippets
+    match /codeSnippets/{snippetId} {
+      allow get: if isValidId(snippetId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(snippetId) && isVerifiedUser()
+        && isValidCodeSnippet(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(snippetId) && isVerifiedUser()
+        && isValidCodeSnippet(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'language', 'code', 'lastOutput', 'updatedAt']);
+      allow delete: if isValidId(snippetId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Nimo",
+  "description": "Nimo — Three-session AI workspace for Chat, Language & General Learning/Quiz, and Coding with Firebase persistence.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
