@@ -245,6 +245,18 @@ export function LiveVoiceModal({
     };
   }, [open, mode, language, level]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        stopSession();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const toggleMute = () => {
@@ -254,11 +266,19 @@ export function LiveVoiceModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="live-voice-title"
+    >
       <div className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800">
           <div>
-            <h3 className="text-base font-semibold font-display text-slate-900 dark:text-white">
+            <h3
+              id="live-voice-title"
+              className="text-base font-semibold font-display text-slate-900 dark:text-white"
+            >
               {mode === 'language' ? `Live ${language} Voice Tutor` : 'Nimo Live Voice Session'}
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">

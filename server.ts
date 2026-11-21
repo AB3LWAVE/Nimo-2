@@ -16,14 +16,31 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+let serverAiClient: GoogleGenAI | null = null;
+
+function hasConfiguredServerGeminiKey(): boolean {
+  const key = (process.env.GEMINI_API_KEY || '').trim();
+  return Boolean(key && key !== 'MY_GEMINI_API_KEY');
+}
+
+function getServerAi(): GoogleGenAI {
+  if (!hasConfiguredServerGeminiKey()) {
+    throw new Error(
+      'GEMINI_API_KEY is not configured on the server. Set GEMINI_API_KEY in AI Studio Secrets or .env to use server-side Audio TTS, Speech-to-Text, and Live Voice.'
+    );
+  }
+  if (!serverAiClient) {
+    serverAiClient = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  }
+  return serverAiClient;
+}
 
 const PAID_MODELS = new Set(['gemini-4-carbon', 'gemini-4-neon']);
 
@@ -143,7 +160,7 @@ async function startServer() {
 
     try {
       const response = await withRetry(() =>
-        ai.models.generateContent({
+        getServerAi().models.generateContent({
           model,
           contents,
           config,
@@ -157,6 +174,86 @@ async function startServer() {
       const formatted = formatGeminiError(err, model);
       res.status(formatted.status).json(formatted);
     }
+  });
+
+  // 1b. Server Hybrid Fallback (used only when client firebase/ai cloud API is unavailable, e.g. Google-hosted Starter Tier projects)
+  app.post('/api/hybrid/fallback', async (req, res) => {
+    const {
+      prompt = '',
+      systemInstruction,
+      history = [],
+      temperature,
+      image,
+      jsonMode = false,
+    } = req.body as {
+      prompt?: string;
+      systemInstruction?: string;
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+      temperature?: number;
+      image?: { base64: string; mimeType: string };
+      jsonMode?: boolean;
+    };
+
+    const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+    if (!trimmedPrompt && !image) {
+      res.status(400).json({ error: 'Prompt or image input is required.' });
+      return;
+    }
+
+    const safeHistory = Array.isArray(history) ? history.slice(-12) : [];
+    const contents = [
+      ...safeHistory.map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: String(m.content || '').slice(0, 8000) }],
+      })),
+      {
+        role: 'user',
+        parts: [
+          ...(image?.base64 && image?.mimeType
+            ? [{ inlineData: { mimeType: image.mimeType, data: image.base64 } }]
+            : []),
+          { text: trimmedPrompt || 'Analyze this attached image.' },
+        ],
+      },
+    ];
+
+    const config: Record<string, unknown> = {
+      ...(systemInstruction ? { systemInstruction } : {}),
+      ...(typeof temperature === 'number' ? { temperature } : {}),
+      ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+    };
+
+    const candidateModels = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'];
+    let lastErr: unknown = null;
+
+    for (const model of candidateModels) {
+      try {
+        const response = await withRetry(() =>
+          getServerAi().models.generateContent({
+            model,
+            contents,
+            config,
+          })
+        );
+        res.json({
+          text: response.text ?? '',
+          modelUsed: model,
+        });
+        return;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+        if (msg.includes('503') || msg.includes('unavailable') || msg.includes('not_found')) {
+          continue;
+        }
+        const formatted = formatGeminiError(err, model);
+        res.status(formatted.status).json(formatted);
+        return;
+      }
+    }
+
+    const formatted = formatGeminiError(lastErr, candidateModels[0]);
+    res.status(formatted.status).json(formatted);
   });
 
   // 2. Audio Transcription (gemini-3.5-transcribe)
@@ -179,7 +276,7 @@ async function startServer() {
         : 'Transcribe the spoken audio faithfully. Return only the spoken transcript without extra commentary.';
 
       const response = await withRetry(() =>
-        ai.models.generateContent({
+        getServerAi().models.generateContent({
           model,
           contents: {
             parts: [
@@ -226,7 +323,7 @@ async function startServer() {
 
     try {
       const response = await withRetry(() =>
-        ai.models.generateContent({
+        getServerAi().models.generateContent({
           model,
           contents: [
             {
@@ -301,7 +398,7 @@ async function startServer() {
       if (action === 'vocab') {
         const model = 'gemini-4-hydrogen';
         const response = await withRetry(() =>
-          ai.models.generateContent({
+          getServerAi().models.generateContent({
             model,
             contents: `Create 6 practical ${level}-level ${targetLanguage} vocabulary lessons on the topic "${topic}". Include accurate translations, learner-friendly phonetic pronunciation guides, and a natural contextual example sentence with its English translation.`,
             config: {
@@ -331,7 +428,7 @@ async function startServer() {
       if (action === 'listening') {
         const model = 'gemini-4-hydrogen';
         const response = await withRetry(() =>
-          ai.models.generateContent({
+          getServerAi().models.generateContent({
             model,
             contents: `Generate a ${level}-level ${targetLanguage} listening comprehension exercise about "${topic}". Provide a short spoken passage (4 to 6 natural sentences in ${targetLanguage}) and 3 multiple-choice comprehension questions in English testing details from the passage, each with 4 options and an explanation.`,
             config: {
@@ -373,7 +470,7 @@ async function startServer() {
           .join('\n');
 
         const response = await withRetry(() =>
-          ai.models.generateContent({
+          getServerAi().models.generateContent({
             model,
             contents: `Target language: ${targetLanguage}\nLearner level: ${level}\nConversation so far:\n${recentHistory || '(New conversation)'}\n\nLearner's latest message: "${userMessage}"\n\nRespond naturally in ${targetLanguage} appropriate for ${level} level, provide an English translation, give a gentle grammar or phrasing tip if helpful (empty string if spotless), and ask one engaging follow-up question in ${targetLanguage}.`,
             config: {
@@ -413,7 +510,7 @@ async function startServer() {
 
         try {
           const response = await withRetry(() =>
-            ai.models.generateContent({
+            getServerAi().models.generateContent({
               model,
               contents: { parts },
               config: {
@@ -495,7 +592,7 @@ async function startServer() {
 
       try {
         const response = await withRetry(() =>
-          ai.models.generateContent({
+          getServerAi().models.generateContent({
             model,
             contents: `Create comprehensive ${difficulty}-level study notes and a structured summary for:\nSubject: ${subject}\nTopic: ${topic}`,
             config,
@@ -521,7 +618,7 @@ async function startServer() {
 
       try {
         const response = await withRetry(() =>
-          ai.models.generateContent({
+          getServerAi().models.generateContent({
             model,
             contents: `Teach me step by step (${difficulty} level, subject: ${subject}):\n${topic}`,
             config,
@@ -540,7 +637,7 @@ async function startServer() {
       const safeCount = Math.min(Math.max(Number(questionCount) || 5, 2), 10);
       try {
         const response = await withRetry(() =>
-          ai.models.generateContent({
+          getServerAi().models.generateContent({
             model,
             contents: `Generate a ${safeCount}-question ${difficulty}-level quiz on "${topic}" (subject: ${subject}). Mix multiple-choice ("mcq", 4 options) and 1-2 short-answer ("short") practice questions. Provide clear step-by-step explanations for each question.`,
             config: {
@@ -584,7 +681,7 @@ async function startServer() {
       const model = 'gemini-3.1-flash-lite';
       try {
         const response = await withRetry(() =>
-          ai.models.generateContent({
+          getServerAi().models.generateContent({
             model,
             contents: `Question: ${questionPrompt}\nReference answer: ${sampleAnswer}\nStudent answer: ${userAnswer}\nGrade whether the student answer demonstrates understanding. Return JSON.`,
             config: {
@@ -670,7 +767,7 @@ async function startServer() {
 
     try {
       const response = await withRetry(() =>
-        ai.models.generateContent({
+        getServerAi().models.generateContent({
           model,
           contents: {
             parts: [
@@ -707,10 +804,10 @@ async function startServer() {
         ? `You are Nimo, an encouraging live ${targetLanguage} speaking tutor for a ${level}-level learner. Converse naturally in ${targetLanguage}, keep replies concise (2-3 sentences), gently correct pronunciation or grammar when needed, and invite the learner to respond.`
         : 'You are Nimo, a friendly, concise real-time voice AI assistant. Answer clearly and naturally.';
 
-    let liveSession: Awaited<ReturnType<typeof ai.live.connect>> | null = null;
+    let liveSession: Awaited<ReturnType<GoogleGenAI['live']['connect']>> | null = null;
 
     try {
-      liveSession = await ai.live.connect({
+      liveSession = await getServerAi().live.connect({
         model: 'gemini-3.8-live',
         config: {
           responseModalities: [Modality.AUDIO],
@@ -815,6 +912,11 @@ async function startServer() {
 
   const port = Number(process.env.PORT) || 3000;
   server.listen(port, '0.0.0.0', () => {
+    if (!hasConfiguredServerGeminiKey()) {
+      console.warn(
+        '[NIMO AI] GEMINI_API_KEY is not configured; server audio TTS/STT and Live Voice endpoints will return a setup error while Firebase AI Logic Hybrid Inference runs via client SDK.'
+      );
+    }
     console.log(`Nimo server running on http://0.0.0.0:${port}`);
   });
 }

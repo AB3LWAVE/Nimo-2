@@ -14,7 +14,9 @@ import {
 import {
   AlertCircle,
   BookOpen,
+  Check,
   CheckCircle2,
+  Copy,
   Eye,
   EyeOff,
   GraduationCap,
@@ -24,19 +26,28 @@ import {
   Mic,
   PhoneCall,
   RefreshCw,
+  RotateCcw,
+  Send,
+  SlidersHorizontal,
   Square,
   Trash2,
   Volume2,
   VolumeX,
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
+import { generateHybridJson, generateHybridText } from '../services/hybridAi';
 import {
+  GeneratedQuiz,
+  HybridInferenceSource,
+  InferenceModePreference,
+  LanguageConversationReply,
   LearnSubMode,
   ListeningExercise,
   ProficiencyLevel,
   PronunciationEvaluation,
   QuizAttempt,
   QuizQuestion,
+  ShortAnswerGrade,
   StudyNote,
   VocabItem,
 } from '../types';
@@ -50,12 +61,24 @@ import {
   stopCurrentAudio,
   transcribeAudioClip,
 } from '../utils/audio';
-import { MarkdownRenderer } from './MarkdownRenderer';
+import {
+  scoreMcqQuestions,
+  validateLanguageConversationReply,
+  validateListeningExercise,
+  validateQuizPayload,
+  validateShortAnswerGrade,
+  validateVocabItems,
+  type VocabLessonItemDraft,
+} from '../utils/validation';
+import { InferenceBadge } from './InferenceBadge';
 import { LiveVoiceModal } from './LiveVoiceModal';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface LearnSessionProps {
   user: User | null;
   onRequireSignIn: () => void;
+  inferenceMode: InferenceModePreference;
+  onOpenHybridSettings: () => void;
 }
 
 type LanguageActivity = 'speaking' | 'vocabulary' | 'listening';
@@ -66,13 +89,29 @@ const SPEEDS = [0.75, 1.0, 1.25, 1.5];
 
 function getTimestampMillis(ts: unknown): number {
   if (!ts) return 0;
-  if (typeof ts === 'object' && ts !== null && 'toMillis' in ts && typeof (ts as { toMillis: () => number }).toMillis === 'function') {
+  if (
+    typeof ts === 'object' &&
+    ts !== null &&
+    'toMillis' in ts &&
+    typeof (ts as { toMillis: () => number }).toMillis === 'function'
+  ) {
     return (ts as { toMillis: () => number }).toMillis();
   }
   return 0;
 }
 
-export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
+interface HybridMetaTag {
+  inferenceSource: HybridInferenceSource;
+  modelUsed: string;
+  latencyMs: number;
+}
+
+export function LearnSession({
+  user,
+  onRequireSignIn,
+  inferenceMode,
+  onOpenHybridSettings,
+}: LearnSessionProps) {
   const [subMode, setSubMode] = useState<LearnSubMode>('language');
 
   // Language Learning State
@@ -82,7 +121,10 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
   const [level, setLevel] = useState<ProficiencyLevel>('Beginner');
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [audioStatusMsg, setAudioStatusMsg] = useState<string | null>(null);
-  const [ttsRetryPayload, setTtsRetryPayload] = useState<{ text: string; language: string } | null>(null);
+  const [ttsRetryPayload, setTtsRetryPayload] = useState<{
+    text: string;
+    language: string;
+  } | null>(null);
   const [playingAudioKey, setPlayingAudioKey] = useState<string | null>(null);
   const [liveTutorOpen, setLiveTutorOpen] = useState(false);
 
@@ -94,6 +136,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
       text: string;
       translation?: string;
       correction?: string;
+      meta?: HybridMetaTag;
     }>
   >([]);
   const [convInput, setConvInput] = useState('');
@@ -103,7 +146,8 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
   const [drillPhrase, setDrillPhrase] = useState('Buenos días, ¿cómo estás hoy?');
   const [drillRecording, setDrillRecording] = useState(false);
   const [drillLoading, setDrillLoading] = useState(false);
-  const [pronunciationResult, setPronunciationResult] = useState<PronunciationEvaluation | null>(null);
+  const [pronunciationResult, setPronunciationResult] =
+    useState<PronunciationEvaluation | null>(null);
   const [lastClipForRetry, setLastClipForRetry] = useState<{
     base64: string;
     mimeType: string;
@@ -114,6 +158,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
   // Vocabulary State
   const [vocabTopic, setVocabTopic] = useState('Daily Greetings & Cafe');
   const [vocabGenerating, setVocabGenerating] = useState(false);
+  const [vocabMeta, setVocabMeta] = useState<HybridMetaTag | null>(null);
   const [savedVocab, setSavedVocab] = useState<VocabItem[]>([]);
   const [guestVocab, setGuestVocab] = useState<VocabItem[]>([]);
 
@@ -121,6 +166,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
   const [listeningTopic, setListeningTopic] = useState('Ordering lunch at a local market');
   const [listeningLoading, setListeningLoading] = useState(false);
   const [listeningExercise, setListeningExercise] = useState<ListeningExercise | null>(null);
+  const [listeningMeta, setListeningMeta] = useState<HybridMetaTag | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
   const [listeningAnswers, setListeningAnswers] = useState<Record<number, number>>({});
   const [listeningChecked, setListeningChecked] = useState(false);
@@ -130,11 +176,17 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
   const [subject, setSubject] = useState('Computer Science');
   const [studyTopic, setStudyTopic] = useState('Recursion and Dynamic Programming');
   const [studyDifficulty, setStudyDifficulty] = useState<ProficiencyLevel>('Intermediate');
-  const [deepThinkingNotes, setDeepThinkingNotes] = useState(false);
   const [notesLoading, setNotesLoading] = useState(false);
-  const [activeNote, setActiveNote] = useState<{ title: string; summaryMarkdown: string; modelUsed?: string } | null>(null);
+  const [activeNote, setActiveNote] = useState<{
+    title: string;
+    summaryMarkdown: string;
+    meta?: HybridMetaTag;
+  } | null>(null);
+  const [noteFollowUpInput, setNoteFollowUpInput] = useState('');
+  const [noteFollowUpLoading, setNoteFollowUpLoading] = useState(false);
+  const [copiedNote, setCopiedNote] = useState(false);
   const [savedNotes, setSavedNotes] = useState<StudyNote[]>([]);
-  const [notesError, setNotesError] = useState<{ message: string; canRetryStandard?: boolean; action?: 'study_notes' | 'explain_step_by_step' } | null>(null);
+  const [notesError, setNotesError] = useState<string | null>(null);
 
   // Quiz State
   const [quizTopic, setQuizTopic] = useState('Cellular Respiration & ATP');
@@ -142,14 +194,17 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
   const [quizCount, setQuizCount] = useState(4);
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizTitle, setQuizTitle] = useState('');
+  const [quizMeta, setQuizMeta] = useState<HybridMetaTag | null>(null);
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
   const [mcqSelections, setMcqSelections] = useState<Record<string, number>>({});
   const [shortAnswers, setShortAnswers] = useState<Record<string, string>>({});
-  const [shortGrades, setShortGrades] = useState<Record<string, { isCorrect: boolean; feedback: string }>>({});
+  const [shortGrades, setShortGrades] = useState<Record<string, ShortAnswerGrade>>({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizScore, setQuizScore] = useState<number>(0);
   const [quizAttempts, setQuizAttempts] = useState<QuizAttempt[]>([]);
-  const [deepExplainMap, setDeepExplainMap] = useState<Record<string, string>>({});
+  const [deepExplainMap, setDeepExplainMap] = useState<
+    Record<string, { text: string; meta: HybridMetaTag }>
+  >({});
   const [deepExplainLoadingId, setDeepExplainLoadingId] = useState<string | null>(null);
 
   const activeRecordingRef = useRef<ActiveRecording | null>(null);
@@ -234,38 +289,56 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
       });
     } catch (err) {
       setPlayingAudioKey(null);
-      const msg = err instanceof Error ? err.message : 'Unable to play audio.';
+      const msg = err instanceof Error ? err.message : 'Unable to play server TTS audio.';
       setAudioStatusMsg(msg);
       setTtsRetryPayload({ text, language: lang });
     }
   };
 
-  // Speaking Practice: Conversational Turn
+  // Speaking Practice: Conversational Turn via Firebase AI Logic Hybrid Inference
   const sendConversationTurn = async (textToSend?: string) => {
+    if (convLoading) return;
     const message = (textToSend ?? convInput).trim();
     if (!message) return;
     setAudioStatusMsg(null);
     if (!textToSend) setConvInput('');
 
     const userMsgId = `u-${Date.now()}`;
-    const updatedHistory = [...convHistory, { id: userMsgId, role: 'user' as const, text: message }];
+    const updatedHistory = [
+      ...convHistory,
+      { id: userMsgId, role: 'user' as const, text: message },
+    ];
     setConvHistory(updatedHistory);
     setConvLoading(true);
 
+    const recentText = updatedHistory
+      .slice(-8)
+      .map((m) => `${m.role === 'user' ? 'Learner' : 'NIMO AI'}: ${m.text}`)
+      .join('\n');
+
+    const prompt = `Target language: ${activeLanguage}
+Learner proficiency level: ${level}
+Recent conversation:
+${recentText}
+
+Respond naturally in ${activeLanguage} appropriate for ${level} level.
+Return ONLY valid JSON with exact keys:
+{
+  "replyTargetLanguage": "string (natural response in ${activeLanguage})",
+  "replyEnglishTranslation": "string (accurate English translation)",
+  "gentleCorrection": "string (helpful grammar/phrasing tip, or empty string if spotless)",
+  "followUpPrompt": "string (engaging follow-up question in ${activeLanguage})"
+}`;
+
     try {
-      const res = await fetch('/api/learn/language', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'conversation',
-          targetLanguage: activeLanguage,
-          level,
-          history: updatedHistory.map((m) => ({ role: m.role, content: m.text })),
-          userMessage: message,
-        }),
+      const { data, meta } = await generateHybridJson<LanguageConversationReply>({
+        prompt,
+        mode: inferenceMode,
+        systemInstruction:
+          'You are NIMO AI, a supportive multilingual conversational language tutor. Return strict JSON only.',
+        validator: validateLanguageConversationReply,
+        requestKey: 'learn-lang-conv',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error || 'Tutor request failed.');
 
       const combinedReply = `${data.replyTargetLanguage} ${data.followUpPrompt || ''}`.trim();
       const assistantId = `a-${Date.now()}`;
@@ -277,10 +350,15 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
           text: combinedReply,
           translation: data.replyEnglishTranslation,
           correction: data.gentleCorrection,
+          meta: {
+            inferenceSource: meta.inferenceSource,
+            modelUsed: meta.modelUsed,
+            latencyMs: meta.latencyMs,
+          },
         },
       ]);
 
-      handlePlayAudio(assistantId, combinedReply, activeLanguage);
+      void handlePlayAudio(assistantId, combinedReply, activeLanguage);
     } catch (err) {
       setAudioStatusMsg(err instanceof Error ? err.message : 'Conversation error.');
     } finally {
@@ -296,15 +374,24 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
       try {
         const clip = await activeRecordingRef.current.stop();
         activeRecordingRef.current = null;
-        const { transcript } = await transcribeAudioClip(clip.base64, clip.mimeType, activeLanguage);
+        const { transcript } = await transcribeAudioClip(
+          clip.base64,
+          clip.mimeType,
+          activeLanguage
+        );
         if (!transcript) {
-          setAudioStatusMsg('No speech detected. Speak clearly and try again.');
+          setAudioStatusMsg('No speech detected. Speak clearly or type your reply.');
           setConvLoading(false);
           return;
         }
+        setConvLoading(false);
         await sendConversationTurn(transcript);
       } catch (err) {
-        setAudioStatusMsg(err instanceof Error ? err.message : 'Voice transcription failed.');
+        setAudioStatusMsg(
+          err instanceof Error
+            ? `${err.message} You can still type your response below.`
+            : 'Voice transcription failed.'
+        );
         setConvLoading(false);
       }
       return;
@@ -319,7 +406,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
     }
   };
 
-  // Pronunciation Coach Drill
+  // Pronunciation Coach Drill (Multimodal Audio Endpoint)
   const evaluatePronunciationClip = async (
     clip: { base64: string; mimeType: string },
     transcript: string,
@@ -366,10 +453,18 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
       try {
         const clip = await activeRecordingRef.current.stop();
         activeRecordingRef.current = null;
-        const { transcript } = await transcribeAudioClip(clip.base64, clip.mimeType, activeLanguage);
+        const { transcript } = await transcribeAudioClip(
+          clip.base64,
+          clip.mimeType,
+          activeLanguage
+        );
         const saved = { base64: clip.base64, mimeType: clip.mimeType, transcript };
         setLastClipForRetry(saved);
-        await evaluatePronunciationClip({ base64: clip.base64, mimeType: clip.mimeType }, transcript, false);
+        await evaluatePronunciationClip(
+          { base64: clip.base64, mimeType: clip.mimeType },
+          transcript,
+          false
+        );
       } catch (err) {
         setAudioStatusMsg(err instanceof Error ? err.message : 'Recording failed.');
         setDrillLoading(false);
@@ -386,31 +481,39 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
     }
   };
 
-  // Vocabulary Generation
+  // Vocabulary Generation via Firebase AI Logic Hybrid Inference
   const generateVocabLesson = async () => {
+    if (vocabGenerating) return;
     setAudioStatusMsg(null);
     setVocabGenerating(true);
-    try {
-      const res = await fetch('/api/learn/language', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'vocab',
-          targetLanguage: activeLanguage,
-          level,
-          topic: vocabTopic || 'Daily Essentials',
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error || 'Failed to generate vocabulary.');
 
-      const items = (data.items || []) as Array<{
-        term: string;
-        translation: string;
-        phonetic: string;
-        exampleSentence: string;
-        exampleTranslation: string;
-      }>;
+    const prompt = `Create 6 practical ${level}-level ${activeLanguage} vocabulary items on the topic "${vocabTopic || 'Daily Essentials'}".
+Return ONLY a valid JSON array of 6 objects with exact keys:
+[
+  {
+    "term": "word or phrase in ${activeLanguage}",
+    "translation": "English meaning",
+    "phonetic": "learner-friendly pronunciation guide",
+    "exampleSentence": "natural example sentence in ${activeLanguage}",
+    "exampleTranslation": "English translation of the example sentence"
+  }
+]`;
+
+    try {
+      const { data: items, meta } = await generateHybridJson<VocabLessonItemDraft[]>({
+        prompt,
+        mode: inferenceMode,
+        systemInstruction:
+          'You are NIMO AI, an expert multilingual vocabulary coach. Return valid JSON array only.',
+        validator: validateVocabItems,
+        requestKey: 'learn-vocab',
+      });
+
+      setVocabMeta({
+        inferenceSource: meta.inferenceSource,
+        modelUsed: meta.modelUsed,
+        latencyMs: meta.latencyMs,
+      });
 
       if (user) {
         for (const item of items) {
@@ -445,10 +548,16 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
         ]);
       }
     } catch (err) {
-      if (user && err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+      if (
+        user &&
+        err instanceof Error &&
+        err.message.includes('Missing or insufficient permissions')
+      ) {
         handleFirestoreError(err, OperationType.CREATE, 'vocabItems');
       }
-      setAudioStatusMsg(err instanceof Error ? err.message : 'Vocabulary generation failed.');
+      setAudioStatusMsg(
+        err instanceof Error ? err.message : 'Vocabulary generation failed.'
+      );
     } finally {
       setVocabGenerating(false);
     }
@@ -480,75 +589,94 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
     }
   };
 
-  // Listening Comprehension
+  // Listening Comprehension via Firebase AI Logic Hybrid Inference
   const generateListeningExercise = async () => {
+    if (listeningLoading) return;
     setAudioStatusMsg(null);
     setListeningLoading(true);
     setShowTranscript(false);
     setListeningAnswers({});
     setListeningChecked(false);
+
+    const topicText = listeningTopic || 'Everyday dialogue';
+    const prompt = `Generate a ${level}-level ${activeLanguage} listening comprehension exercise about "${topicText}".
+Return ONLY a valid JSON object with exact structure:
+{
+  "title": "short descriptive title",
+  "passageText": "4 to 6 natural spoken sentences entirely in ${activeLanguage}",
+  "questions": [
+    {
+      "question": "English comprehension question about a detail in the passage",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctIndex": 0,
+      "explanation": "Brief explanation referencing the passage"
+    }
+  ]
+}
+Include exactly 3 questions with 4 options each.`;
+
     try {
-      const res = await fetch('/api/learn/language', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'listening',
-          targetLanguage: activeLanguage,
-          level,
-          topic: listeningTopic || 'Everyday dialogue',
-        }),
+      const { data, meta } = await generateHybridJson<ListeningExercise>({
+        prompt,
+        mode: inferenceMode,
+        systemInstruction:
+          'You are NIMO AI, a language curriculum designer. Return strict JSON only.',
+        validator: (raw) => validateListeningExercise(raw, `${activeLanguage}: ${topicText}`),
+        requestKey: 'learn-listening',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error || 'Failed to generate listening exercise.');
-      setListeningExercise(data.exercise);
+      setListeningExercise(data);
+      setListeningMeta({
+        inferenceSource: meta.inferenceSource,
+        modelUsed: meta.modelUsed,
+        latencyMs: meta.latencyMs,
+      });
     } catch (err) {
-      setAudioStatusMsg(err instanceof Error ? err.message : 'Listening exercise failed.');
+      setAudioStatusMsg(
+        err instanceof Error ? err.message : 'Listening exercise generation failed.'
+      );
     } finally {
       setListeningLoading(false);
     }
   };
 
-  // General Learning: Study Notes & Step-by-Step
-  const runStudyAction = async (
-    action: 'study_notes' | 'explain_step_by_step',
-    fallbackToStandard = false
-  ) => {
-    if (!studyTopic.trim()) return;
+  // General Learning: Study Notes & Step-by-Step via Firebase AI Logic Hybrid Inference
+  const runStudyAction = async (action: 'study_notes' | 'explain_step_by_step') => {
+    if (!studyTopic.trim() || notesLoading) return;
     setNotesError(null);
     setNotesLoading(true);
-    try {
-      const res = await fetch('/api/learn/general', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          subject,
-          topic: studyTopic,
-          difficulty: studyDifficulty,
-          deepMode: deepThinkingNotes,
-          fallbackToStandard,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setNotesError({
-          message: data.message || data.error || 'Failed to generate learning material.',
-          canRetryStandard: Boolean(data.isBillingRequired),
-          action,
-        });
-        return;
-      }
 
-      const title = data.title || `${subject}: ${studyTopic}`;
-      const summaryMarkdown = (data.summaryMarkdown || data.explanation || '').slice(0, 25000);
-      setActiveNote({ title, summaryMarkdown, modelUsed: data.modelUsed });
+    const prompt =
+      action === 'study_notes'
+        ? `Create comprehensive ${studyDifficulty}-level study notes and a structured summary for:\nSubject: ${subject}\nTopic: ${studyTopic}\nUse clean markdown headings, bulleted key concepts, a worked example, and a concise summary.`
+        : `Teach me step by step (${studyDifficulty} level, subject: ${subject}): "${studyTopic}".\nBreak down the concept into numbered logical steps, build intuition, and note common mistakes.`;
+
+    try {
+      const result = await generateHybridText({
+        prompt,
+        mode: inferenceMode,
+        systemInstruction:
+          'You are NIMO AI, a patient academic tutor. Produce crisp, accurate markdown study guides and step-by-step explanations.',
+        requestKey: 'learn-study',
+      });
+
+      const title = `${subject}: ${studyTopic}`.slice(0, 160);
+      const summaryMarkdown = result.text.slice(0, 25000);
+      setActiveNote({
+        title,
+        summaryMarkdown,
+        meta: {
+          inferenceSource: result.inferenceSource,
+          modelUsed: result.modelUsed,
+          latencyMs: result.latencyMs,
+        },
+      });
 
       if (user && summaryMarkdown) {
         try {
           await addDoc(collection(db, 'studyNotes'), {
             ownerId: user.uid,
             subject: subject.slice(0, 80),
-            title: title.slice(0, 160),
+            title,
             summaryMarkdown,
             createdAt: serverTimestamp(),
           });
@@ -557,17 +685,57 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
         }
       }
     } catch (err) {
-      setNotesError({
-        message: err instanceof Error ? err.message : 'Network error generating study notes.',
-      });
+      setNotesError(
+        err instanceof Error ? err.message : 'Failed to generate study material.'
+      );
     } finally {
       setNotesLoading(false);
     }
   };
 
-  // General Learning: Quiz Generator & Grader
+  const askNoteFollowUp = async () => {
+    if (!activeNote || !noteFollowUpInput.trim() || noteFollowUpLoading) return;
+    setNotesError(null);
+    setNoteFollowUpLoading(true);
+    const question = noteFollowUpInput.trim();
+    setNoteFollowUpInput('');
+
+    try {
+      const result = await generateHybridText({
+        prompt: `Based on these study notes titled "${activeNote.title}":\n\n${activeNote.summaryMarkdown.slice(0, 4000)}\n\nAnswer the student's follow-up question clearly:\n${question}`,
+        mode: inferenceMode,
+        systemInstruction:
+          'You are NIMO AI, answering a student follow-up question clearly and concisely.',
+        requestKey: 'learn-study-followup',
+      });
+      setActiveNote((prev) =>
+        prev
+          ? {
+              ...prev,
+              summaryMarkdown: `${prev.summaryMarkdown}\n\n---\n\n### Follow-up: ${question}\n\n${result.text}`.slice(
+                0,
+                25000
+              ),
+              meta: {
+                inferenceSource: result.inferenceSource,
+                modelUsed: result.modelUsed,
+                latencyMs: result.latencyMs,
+              },
+            }
+          : prev
+      );
+    } catch (err) {
+      setNotesError(
+        err instanceof Error ? err.message : 'Unable to answer follow-up question.'
+      );
+    } finally {
+      setNoteFollowUpLoading(false);
+    }
+  };
+
+  // General Learning: Quiz Generator & Grader via Firebase AI Logic Hybrid Inference
   const generateQuiz = async () => {
-    if (!quizTopic.trim()) return;
+    if (!quizTopic.trim() || quizLoading) return;
     setNotesError(null);
     setQuizLoading(true);
     setQuizSubmitted(false);
@@ -575,58 +743,86 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
     setShortAnswers({});
     setShortGrades({});
     setDeepExplainMap({});
+
+    const safeCount = Math.min(Math.max(Number(quizCount) || 4, 3), 8);
+    const prompt = `Generate a ${safeCount}-question ${quizDifficulty}-level quiz on "${quizTopic}" (subject: ${subject}).
+Mix multiple-choice ("mcq", exactly 4 options) and 1 short-answer ("short") practice question.
+Return ONLY valid JSON with exact structure:
+{
+  "title": "Quiz title",
+  "questions": [
+    {
+      "id": "q1",
+      "type": "mcq",
+      "prompt": "Question text",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctIndex": 0,
+      "explanation": "Why the correct option is right"
+    },
+    {
+      "id": "q2",
+      "type": "short",
+      "prompt": "Short-answer question",
+      "sampleAnswer": "Expected key points",
+      "explanation": "Clear explanation"
+    }
+  ]
+}`;
+
     try {
-      const res = await fetch('/api/learn/general', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'generate_quiz',
-          subject,
-          topic: quizTopic,
-          difficulty: quizDifficulty,
-          questionCount: quizCount,
-        }),
+      const { data, meta } = await generateHybridJson<GeneratedQuiz>({
+        prompt,
+        mode: inferenceMode,
+        systemInstruction:
+          'You are NIMO AI, an educational assessment designer. Return strict valid JSON only.',
+        validator: (raw) => validateQuizPayload(raw, quizTopic),
+        requestKey: 'learn-quiz-gen',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error || 'Failed to create quiz.');
-      setQuizTitle(data.title || quizTopic);
-      setQuizQuestions(data.questions || []);
+      setQuizTitle(data.title);
+      setQuizQuestions(data.questions);
+      setQuizMeta({
+        inferenceSource: meta.inferenceSource,
+        modelUsed: meta.modelUsed,
+        latencyMs: meta.latencyMs,
+      });
     } catch (err) {
-      setNotesError({ message: err instanceof Error ? err.message : 'Quiz error.' });
+      setNotesError(err instanceof Error ? err.message : 'Quiz generation error.');
     } finally {
       setQuizLoading(false);
     }
   };
 
+  const retrySameQuiz = () => {
+    setMcqSelections({});
+    setShortAnswers({});
+    setShortGrades({});
+    setQuizSubmitted(false);
+    setQuizScore(0);
+    setDeepExplainMap({});
+  };
+
   const submitQuiz = async () => {
+    if (quizQuestions.length === 0 || quizLoading) return;
     setQuizLoading(true);
-    let score = 0;
-    const updatedShortGrades: Record<string, { isCorrect: boolean; feedback: string }> = {};
+    setNotesError(null);
+
+    const { mcqScore } = scoreMcqQuestions(quizQuestions, mcqSelections);
+    let score = mcqScore;
+    const updatedShortGrades: Record<string, ShortAnswerGrade> = {};
 
     try {
       for (const q of quizQuestions) {
-        if (q.type === 'mcq') {
-          if (mcqSelections[q.id] === q.correctIndex) {
-            score += 1;
-          }
-        } else {
+        if (q.type === 'short') {
           const ans = (shortAnswers[q.id] || '').trim();
           if (ans) {
-            const res = await fetch('/api/learn/general', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                action: 'grade_short_answer',
-                questionPrompt: q.prompt,
-                sampleAnswer: q.sampleAnswer || q.explanation,
-                userAnswer: ans,
-              }),
+            const { data: grade } = await generateHybridJson<ShortAnswerGrade>({
+              prompt: `Question: ${q.prompt}\nReference answer: ${q.sampleAnswer || q.explanation}\nStudent answer: ${ans}\nReturn ONLY valid JSON: { "isCorrect": true/false, "feedback": "1-2 sentence grading feedback" }`,
+              mode: inferenceMode,
+              systemInstruction: 'Grade the student answer fairly. Return strict JSON only.',
+              validator: validateShortAnswerGrade,
             });
-            const grade = await res.json();
-            if (res.ok) {
-              updatedShortGrades[q.id] = grade;
-              if (grade.isCorrect) score += 1;
-            }
+            updatedShortGrades[q.id] = grade;
+            if (grade.isCorrect) score += 1;
           } else {
             updatedShortGrades[q.id] = { isCorrect: false, feedback: 'No answer entered.' };
           }
@@ -645,48 +841,65 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
             difficulty: quizDifficulty,
             score,
             totalQuestions: quizQuestions.length,
-            summaryText: `Scored ${score}/${quizQuestions.length} on ${quizTitle || quizTopic}`.slice(0, 4000),
+            summaryText: `Scored ${score}/${quizQuestions.length} on ${quizTitle || quizTopic}`.slice(
+              0,
+              4000
+            ),
             createdAt: serverTimestamp(),
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, 'quizAttempts');
         }
       }
+    } catch (err) {
+      setNotesError(err instanceof Error ? err.message : 'Unable to finish quiz grading.');
     } finally {
       setQuizLoading(false);
     }
   };
 
-  const explainQuestionDeeply = async (q: QuizQuestion, fallbackToStandard = false) => {
+  const explainQuestionDeeply = async (q: QuizQuestion) => {
     setDeepExplainLoadingId(q.id);
     setNotesError(null);
     try {
-      const res = await fetch('/api/learn/general', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'explain_step_by_step',
-          subject,
-          difficulty: quizDifficulty,
-          topic: `${q.prompt}\nExpected concept: ${q.explanation}`,
-          fallbackToStandard,
-        }),
+      const result = await generateHybridText({
+        prompt: `Teach step by step (${quizDifficulty} level, subject: ${subject}):\nQuestion: ${q.prompt}\nCore concept: ${q.explanation}`,
+        mode: inferenceMode,
+        systemInstruction:
+          'You are NIMO AI, a patient step-by-step teacher explaining why the answer works.',
+        requestKey: `learn-explain-${q.id}`,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setNotesError({
-          message: data.message || data.error || 'Could not load deep explanation.',
-          canRetryStandard: Boolean(data.isBillingRequired),
-        });
-        return;
-      }
-      setDeepExplainMap((prev) => ({ ...prev, [q.id]: data.explanation }));
+      setDeepExplainMap((prev) => ({
+        ...prev,
+        [q.id]: {
+          text: result.text,
+          meta: {
+            inferenceSource: result.inferenceSource,
+            modelUsed: result.modelUsed,
+            latencyMs: result.latencyMs,
+          },
+        },
+      }));
+    } catch (err) {
+      setNotesError(err instanceof Error ? err.message : 'Could not load step-by-step guide.');
     } finally {
       setDeepExplainLoadingId(null);
     }
   };
 
   const displayedVocab = user ? savedVocab : guestVocab;
+  const masteredVocabCount = displayedVocab.filter((v) => v.mastered).length;
+  const avgQuizPct =
+    quizAttempts.length > 0
+      ? Math.round(
+          (quizAttempts.reduce(
+            (acc, a) => acc + (a.totalQuestions > 0 ? a.score / a.totalQuestions : 0),
+            0
+          ) /
+            quizAttempts.length) *
+            100
+        )
+      : 0;
 
   return (
     <div className="flex-1 bg-slate-50 dark:bg-slate-950">
@@ -698,35 +911,46 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
               Learn &amp; Quiz Studio
             </h1>
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              Interactive audio language tutoring alongside structured study notes and adaptive quizzes.
+              Audio-enabled language tutoring plus structured study notes and adaptive quizzes powered by Firebase AI Logic Hybrid Inference.
             </p>
           </div>
 
-          <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-200/70 dark:bg-slate-800">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setSubMode('language')}
-              className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                subMode === 'language'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
+              onClick={onOpenHybridSettings}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
             >
-              <Languages className="w-4 h-4" />
-              Language Learning
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              Hybrid Setup
             </button>
-            <button
-              type="button"
-              onClick={() => setSubMode('general')}
-              className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                subMode === 'general'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <GraduationCap className="w-4 h-4" />
-              General Learning &amp; Quiz
-            </button>
+
+            <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-200/70 dark:bg-slate-800">
+              <button
+                type="button"
+                onClick={() => setSubMode('language')}
+                className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  subMode === 'language'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Languages className="w-4 h-4" />
+                Language Learning
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubMode('general')}
+                className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  subMode === 'general'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <GraduationCap className="w-4 h-4" />
+                General Learning &amp; Quiz
+              </button>
+            </div>
           </div>
         </div>
 
@@ -821,9 +1045,9 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
                 <span>
-                  {activeLanguage} · {level} · {playbackSpeed.toFixed(2).replace(/\.00$/, '.0')}x audio speed · Speech via Gemini TTS/STT &amp; Web Audio APIs; vocabulary synced to Firestore
+                  {activeLanguage} · {level} · Text lessons use Firebase AI Logic Hybrid Inference; speech TTS/STT &amp; pronunciation audio use browser Web Speech &amp; dedicated Gemini audio endpoints.
                 </span>
-                <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-800">
+                <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-800 overflow-x-auto">
                   {(
                     [
                       { id: 'speaking', label: 'Speaking & Pronunciation' },
@@ -851,7 +1075,9 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
             {!audioSupport.micSupported && (
               <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-sm text-amber-800 dark:text-amber-200 flex items-start gap-2.5">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{audioStatusMsg || audioStatusNoticeText(audioSupport.reason)}</span>
+                <span>
+                  {audioStatusNoticeText(audioSupport.reason)} Typed practice, audio playback, vocabulary decks, and listening exercises remain fully available.
+                </span>
               </div>
             )}
 
@@ -884,28 +1110,26 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* Left: Conversational Speaking Practice */}
                 <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col min-h-[460px]">
-                  <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                    <div>
-                      <h2 className="text-base font-semibold font-display text-slate-900 dark:text-white">
-                        Conversational Practice with Nimo
-                      </h2>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Speak via microphone or type in {activeLanguage}. Nimo replies aloud with corrections.
-                      </p>
-                    </div>
+                  <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+                    <h2 className="text-base font-semibold font-display text-slate-900 dark:text-white">
+                      Conversational Practice with NIMO AI
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Speak via microphone or type in {activeLanguage}. NIMO AI replies with translations, gentle corrections, and audio playback.
+                    </p>
                   </div>
 
                   <div className="flex-1 overflow-y-auto p-5 space-y-4">
                     {convHistory.length === 0 ? (
                       <div className="py-10 text-center space-y-3">
                         <p className="text-sm text-slate-600 dark:text-slate-400">
-                          Click the microphone to say hello in {activeLanguage}, or try a starter line.
+                          Click the microphone or type below to practice {activeLanguage} conversation.
                         </p>
                         <button
                           type="button"
                           onClick={() =>
                             sendConversationTurn(
-                              `Hola Nimo! Let's practice ${level} ${activeLanguage} conversation.`
+                              `Hello NIMO AI! Let's practice ${level} ${activeLanguage} conversation.`
                             )
                           }
                           className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -939,23 +1163,31 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                             )}
                           </div>
                           {m.role === 'assistant' && (
-                            <button
-                              type="button"
-                              onClick={() => handlePlayAudio(m.id, m.text, activeLanguage)}
-                              className="mt-1 inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-sky-600 dark:text-slate-400 dark:hover:text-sky-400"
-                            >
-                              {playingAudioKey === m.id ? (
-                                <>
-                                  <VolumeX className="w-3.5 h-3.5" />
-                                  Stop Audio
-                                </>
-                              ) : (
-                                <>
-                                  <Volume2 className="w-3.5 h-3.5" />
-                                  Listen ({playbackSpeed}x)
-                                </>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-2.5">
+                              <button
+                                type="button"
+                                onClick={() => handlePlayAudio(m.id, m.text, activeLanguage)}
+                                className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-sky-600 dark:text-slate-400 dark:hover:text-sky-400"
+                              >
+                                {playingAudioKey === m.id ? (
+                                  <>
+                                    <VolumeX className="w-3.5 h-3.5" />
+                                    Stop Audio
+                                  </>
+                                ) : (
+                                  <>
+                                    <Volume2 className="w-3.5 h-3.5" />
+                                    Listen ({playbackSpeed}x)
+                                  </>
+                                )}
+                              </button>
+                              {m.meta && (
+                                <InferenceBadge
+                                  source={m.meta.inferenceSource}
+                                  latencyMs={m.meta.latencyMs}
+                                />
                               )}
-                            </button>
+                            </div>
                           )}
                         </div>
                       ))
@@ -963,7 +1195,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                     {convLoading && (
                       <div className="flex items-center gap-2 text-xs text-slate-500">
                         <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-600" />
-                        <span>Nimo is responding...</span>
+                        <span>NIMO AI is responding...</span>
                       </div>
                     )}
                   </div>
@@ -993,7 +1225,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                       type="text"
                       value={convInput}
                       onChange={(e) => setConvInput(e.target.value)}
-                      placeholder={`Reply in ${activeLanguage}...`}
+                      placeholder={`Reply in ${activeLanguage} (or English)...`}
                       className="flex-1 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
                     />
 
@@ -1014,7 +1246,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                       Pronunciation Coach
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Listen to the target phrase, repeat it into your microphone, and receive phonetic feedback.
+                      Listen to the target phrase, repeat it into your microphone, and receive acoustic phonetic feedback (server audio endpoint).
                     </p>
                   </div>
 
@@ -1049,7 +1281,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                         className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
                           drillRecording
                             ? 'bg-red-600 hover:bg-red-700 text-white'
-                            : 'bg-sky-600 hover:bg-sky-700 text-white'
+                            : 'bg-sky-600 hover:bg-sky-700 text-white disabled:opacity-40'
                         }`}
                       >
                         {drillLoading ? (
@@ -1077,20 +1309,24 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                       className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
-                      Evaluate with Standard Model (gemini-4-hydrogen)
+                      Evaluate with Standard Server Model
                     </button>
                   )}
 
                   {pronunciationResult && (
                     <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-slate-500 dark:text-slate-400">
-                          Heard: &ldquo;{pronunciationResult.transcriptObserved}&rdquo;
-                        </span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <InferenceBadge
+                          source="server_multimodal"
+                          modelUsed={pronunciationResult.modelUsed}
+                        />
                         <span className="font-mono tabular-nums text-sm font-semibold text-sky-700 dark:text-sky-300">
                           {pronunciationResult.accuracyScore}% match
                         </span>
                       </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Heard: &ldquo;{pronunciationResult.transcriptObserved}&rdquo;
+                      </p>
                       <p className="text-slate-700 dark:text-slate-200 leading-relaxed">
                         {pronunciationResult.pronunciationFeedback}
                       </p>
@@ -1149,6 +1385,21 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                   )}
                 </div>
 
+                {(displayedVocab.length > 0 || vocabMeta) && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-600 dark:text-slate-400">
+                    <span className="font-mono tabular-nums">
+                      Mastered: {masteredVocabCount} / {displayedVocab.length} cards
+                    </span>
+                    {vocabMeta && (
+                      <InferenceBadge
+                        source={vocabMeta.inferenceSource}
+                        modelUsed={vocabMeta.modelUsed}
+                        latencyMs={vocabMeta.latencyMs}
+                      />
+                    )}
+                  </div>
+                )}
+
                 {displayedVocab.length === 0 ? (
                   <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center text-sm text-slate-500 dark:text-slate-400">
                     Generate a {activeLanguage} vocabulary lesson above to practice words, translations, contextual examples, and audio pronunciation.
@@ -1177,6 +1428,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                               type="button"
                               onClick={() => handlePlayAudio(`vw-${item.id}`, item.term, item.language)}
                               title="Hear word pronunciation"
+                              aria-label={`Play pronunciation for ${item.term}`}
                               className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-950/50 transition-colors"
                             >
                               {playingAudioKey === `vw-${item.id}` ? (
@@ -1202,6 +1454,7 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                                   handlePlayAudio(`vs-${item.id}`, item.exampleSentence, item.language)
                                 }
                                 title="Hear example sentence"
+                                aria-label="Hear example sentence"
                                 className="p-1 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 shrink-0"
                               >
                                 <Volume2 className="w-3.5 h-3.5" />
@@ -1287,20 +1540,33 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                 {listeningExercise && (
                   <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-6">
                     <div className="flex flex-wrap items-center justify-between gap-4">
-                      <div>
+                      <div className="space-y-1">
                         <h3 className="text-lg font-semibold font-display text-slate-900 dark:text-white">
                           {listeningExercise.title}
                         </h3>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          Listen at {playbackSpeed}x speed before checking comprehension questions.
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            Listen at {playbackSpeed}x speed before checking answers.
+                          </span>
+                          {listeningMeta && (
+                            <InferenceBadge
+                              source={listeningMeta.inferenceSource}
+                              modelUsed={listeningMeta.modelUsed}
+                              latencyMs={listeningMeta.latencyMs}
+                            />
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
                           onClick={() =>
-                            handlePlayAudio('listening-passage', listeningExercise.passageText, activeLanguage)
+                            handlePlayAudio(
+                              'listening-passage',
+                              listeningExercise.passageText,
+                              activeLanguage
+                            )
                           }
                           className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-700 text-white transition-colors whitespace-nowrap"
                         >
@@ -1433,20 +1699,9 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
             </div>
 
             {notesError && (
-              <div className="p-4 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-sm text-red-700 dark:text-red-300 space-y-2">
-                <div className="flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{notesError.message}</span>
-                </div>
-                {notesError.canRetryStandard && notesError.action && (
-                  <button
-                    type="button"
-                    onClick={() => runStudyAction(notesError.action!, true)}
-                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white dark:bg-slate-900 border border-red-300 dark:border-red-800 text-slate-900 dark:text-white"
-                  >
-                    Retry with Standard Model (gemini-4-hydrogen)
-                  </button>
-                )}
+              <div className="p-4 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-sm text-red-700 dark:text-red-300 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{notesError}</span>
               </div>
             )}
 
@@ -1510,22 +1765,42 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
 
                   {quizQuestions.length === 0 ? (
                     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center text-sm text-slate-500 dark:text-slate-400">
-                      Choose any topic and difficulty above to generate interactive multiple-choice and short-answer practice questions.
+                      Choose any topic and difficulty above to generate validated multiple-choice and short-answer practice questions.
                     </div>
                   ) : (
                     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-6">
                       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
-                        <div>
+                        <div className="space-y-1">
                           <h2 className="text-lg font-semibold font-display text-slate-900 dark:text-white">
                             {quizTitle}
                           </h2>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">
-                            {quizDifficulty} · {quizQuestions.length} questions
-                          </p>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span>
+                              {quizDifficulty} · {quizQuestions.length} questions
+                            </span>
+                            {quizMeta && (
+                              <InferenceBadge
+                                source={quizMeta.inferenceSource}
+                                modelUsed={quizMeta.modelUsed}
+                                latencyMs={quizMeta.latencyMs}
+                              />
+                            )}
+                          </div>
                         </div>
+
                         {quizSubmitted && (
-                          <div className="text-sm font-semibold font-mono tabular-nums text-sky-700 dark:text-sky-300">
-                            Score: {quizScore} / {quizQuestions.length}
+                          <div className="flex items-center gap-3">
+                            <div className="text-sm font-semibold font-mono tabular-nums text-sky-700 dark:text-sky-300">
+                              Score: {quizScore} / {quizQuestions.length}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={retrySameQuiz}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              Retry Same Quiz
+                            </button>
                           </div>
                         )}
                       </div>
@@ -1581,7 +1856,10 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                                   disabled={quizSubmitted}
                                   value={shortAnswers[q.id] || ''}
                                   onChange={(e) =>
-                                    setShortAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                                    setShortAnswers((prev) => ({
+                                      ...prev,
+                                      [q.id]: e.target.value,
+                                    }))
                                   }
                                   placeholder="Write your short answer..."
                                   className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
@@ -1615,11 +1893,16 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                                   {deepExplainLoadingId === q.id && (
                                     <Loader2 className="w-3 h-3 animate-spin" />
                                   )}
-                                  Teach Step-by-Step (Deep Thinking)
+                                  Teach Step-by-Step
                                 </button>
                                 {deepExplainMap[q.id] && (
-                                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
-                                    <MarkdownRenderer content={deepExplainMap[q.id]} />
+                                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
+                                    <InferenceBadge
+                                      source={deepExplainMap[q.id].meta.inferenceSource}
+                                      modelUsed={deepExplainMap[q.id].meta.modelUsed}
+                                      latencyMs={deepExplainMap[q.id].meta.latencyMs}
+                                    />
+                                    <MarkdownRenderer content={deepExplainMap[q.id].text} />
                                   </div>
                                 )}
                               </div>
@@ -1646,9 +1929,16 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
 
                 {/* Recent Quiz Attempts Sidebar */}
                 <aside className="lg:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 h-fit">
-                  <h3 className="text-base font-semibold font-display text-slate-900 dark:text-white">
-                    Quiz History
-                  </h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-base font-semibold font-display text-slate-900 dark:text-white">
+                      Quiz History
+                    </h3>
+                    {user && quizAttempts.length > 0 && (
+                      <span className="text-xs font-mono tabular-nums text-sky-600 dark:text-sky-400">
+                        {avgQuizPct}% avg ({quizAttempts.length})
+                      </span>
+                    )}
+                  </div>
                   {!user ? (
                     <div className="space-y-2.5 text-xs text-slate-600 dark:text-slate-400">
                       <p>Sign in with Google to save your quiz scores and review history.</p>
@@ -1733,77 +2023,119 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={deepThinkingNotes}
-                          onChange={(e) => setDeepThinkingNotes(e.target.checked)}
-                          className="rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-                        />
-                        Use Deep Thinking (gemini-4-carbon)
-                      </label>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => runStudyAction('study_notes')}
-                          disabled={notesLoading}
-                          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white transition-colors whitespace-nowrap"
-                        >
-                          {notesLoading ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <BookOpen className="w-4 h-4" />
-                          )}
-                          Generate Study Notes
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runStudyAction('explain_step_by_step')}
-                          disabled={notesLoading}
-                          className="px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
-                        >
-                          Teach Step-by-Step
-                        </button>
-                      </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => runStudyAction('study_notes')}
+                        disabled={notesLoading}
+                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white transition-colors whitespace-nowrap"
+                      >
+                        {notesLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <BookOpen className="w-4 h-4" />
+                        )}
+                        Generate Study Notes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => runStudyAction('explain_step_by_step')}
+                        disabled={notesLoading}
+                        className="px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
+                      >
+                        Teach Step-by-Step
+                      </button>
                     </div>
                   </div>
 
                   {activeNote && (
                     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4">
-                      <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-                        <div>
+                      <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+                        <div className="space-y-1">
                           <h2 className="text-lg font-semibold font-display text-slate-900 dark:text-white">
                             {activeNote.title}
                           </h2>
-                          {activeNote.modelUsed && (
-                            <p className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                              {activeNote.modelUsed}
-                            </p>
+                          {activeNote.meta && (
+                            <InferenceBadge
+                              source={activeNote.meta.inferenceSource}
+                              modelUsed={activeNote.meta.modelUsed}
+                              latencyMs={activeNote.meta.latencyMs}
+                            />
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handlePlayAudio('study-note', activeNote.summaryMarkdown, 'English')
-                          }
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
-                        >
-                          {playingAudioKey === 'study-note' ? (
-                            <>
-                              <VolumeX className="w-3.5 h-3.5" />
-                              Stop Reading
-                            </>
-                          ) : (
-                            <>
-                              <Volume2 className="w-3.5 h-3.5" />
-                              Read Aloud
-                            </>
-                          )}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(activeNote.summaryMarkdown);
+                                setCopiedNote(true);
+                                setTimeout(() => setCopiedNote(false), 1600);
+                              } catch {
+                                // ignore
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                          >
+                            {copiedNote ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-500" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                            {copiedNote ? 'Copied' : 'Copy'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handlePlayAudio('study-note', activeNote.summaryMarkdown, 'English')
+                            }
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                          >
+                            {playingAudioKey === 'study-note' ? (
+                              <>
+                                <VolumeX className="w-3.5 h-3.5" />
+                                Stop Reading
+                              </>
+                            ) : (
+                              <>
+                                <Volume2 className="w-3.5 h-3.5" />
+                                Read Aloud
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
+
                       <MarkdownRenderer content={activeNote.summaryMarkdown} />
+
+                      {/* Follow-up Question Composer */}
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void askNoteFollowUp();
+                        }}
+                        className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2"
+                      >
+                        <input
+                          type="text"
+                          value={noteFollowUpInput}
+                          onChange={(e) => setNoteFollowUpInput(e.target.value)}
+                          placeholder="Ask a follow-up question about these notes..."
+                          className="flex-1 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                        />
+                        <button
+                          type="submit"
+                          disabled={noteFollowUpLoading || !noteFollowUpInput.trim()}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white whitespace-nowrap"
+                        >
+                          {noteFollowUpLoading ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Send className="w-3.5 h-3.5" />
+                          )}
+                          Ask Follow-up
+                        </button>
+                      </form>
                     </div>
                   )}
                 </div>
@@ -1841,7 +2173,9 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                             <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
                               {note.title}
                             </p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">{note.subject}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              {note.subject}
+                            </p>
                           </button>
                           <button
                             type="button"
@@ -1849,7 +2183,11 @@ export function LearnSession({ user, onRequireSignIn }: LearnSessionProps) {
                               try {
                                 await deleteDoc(doc(db, 'studyNotes', note.id));
                               } catch (err) {
-                                handleFirestoreError(err, OperationType.DELETE, `studyNotes/${note.id}`);
+                                handleFirestoreError(
+                                  err,
+                                  OperationType.DELETE,
+                                  `studyNotes/${note.id}`
+                                );
                               }
                             }}
                             aria-label={`Delete ${note.title}`}

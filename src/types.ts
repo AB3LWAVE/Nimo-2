@@ -1,7 +1,58 @@
-export type SessionTab = 'chat' | 'learn' | 'coding';
+export type SessionTab = 'chat' | 'learn' | 'create';
 export type LearnSubMode = 'language' | 'general';
+export type CreateSubMode = 'write' | 'brainstorm' | 'code';
+export type CreateDraftCategory = 'writing' | 'rewrite' | 'brainstorm' | 'plan';
 export type ProficiencyLevel = 'Beginner' | 'Intermediate' | 'Advanced';
-export type ChatModelMode = 'fast' | 'balanced' | 'thinking' | 'vision';
+
+export type InferenceModePreference =
+  | 'prefer_on_device'
+  | 'only_on_device'
+  | 'prefer_in_cloud'
+  | 'only_in_cloud';
+
+export type LegacyChatModelMode = 'fast' | 'balanced' | 'thinking' | 'vision';
+export type ChatModelMode = InferenceModePreference | LegacyChatModelMode;
+
+export type HybridInferenceSource = 'on_device' | 'in_cloud';
+export type SdkInferenceSource = 'ON_DEVICE' | 'IN_CLOUD';
+export type MessageInferenceSource = HybridInferenceSource | 'server_multimodal' | 'user';
+
+export type OnDeviceAvailabilityState =
+  | 'available'
+  | 'downloadable'
+  | 'downloading'
+  | 'unavailable'
+  | 'unsupported';
+
+export type AppCheckStatus =
+  | 'active-recaptcha-v3'
+  | 'active-recaptcha-enterprise'
+  | 'unconfigured-site-key'
+  | 'error';
+
+export interface HybridRuntimeStatus {
+  browserSupported: boolean;
+  onDeviceAvailability: OnDeviceAvailabilityState;
+  online: boolean;
+  downloadProgress: number | null;
+  isDownloading: boolean;
+  deviceModelReady: boolean;
+  appCheckStatus: AppCheckStatus;
+  cloudModel: string;
+  lastInferenceSource: SdkInferenceSource | null;
+  lastModelUsed: string | null;
+  lastLatencyMs: number | null;
+  lastError: string | null;
+}
+
+export interface HybridGenerationResult {
+  text: string;
+  inferenceSource: HybridInferenceSource;
+  sdkInferenceSource: SdkInferenceSource;
+  modelUsed: string;
+  latencyMs: number;
+  modeUsed: InferenceModePreference;
+}
 
 export interface UserProfile {
   uid: string;
@@ -28,6 +79,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   modelUsed: string;
+  inferenceSource?: MessageInferenceSource;
+  latencyMs?: number;
   hasImage: boolean;
   imagePreview?: string;
   createdAt?: unknown;
@@ -60,6 +113,13 @@ export interface ListeningExercise {
   questions: ListeningQuestion[];
 }
 
+export interface LanguageConversationReply {
+  replyTargetLanguage: string;
+  replyEnglishTranslation: string;
+  gentleCorrection: string;
+  followUpPrompt: string;
+}
+
 export interface PronunciationEvaluation {
   transcriptObserved: string;
   accuracyScore: number;
@@ -89,6 +149,16 @@ export interface QuizQuestion {
   explanation: string;
 }
 
+export interface GeneratedQuiz {
+  title: string;
+  questions: QuizQuestion[];
+}
+
+export interface ShortAnswerGrade {
+  isCorrect: boolean;
+  feedback: string;
+}
+
 export interface QuizAttempt {
   id: string;
   ownerId: string;
@@ -107,6 +177,17 @@ export interface CodeSnippet {
   language: string;
   code: string;
   lastOutput: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface CreateDraft {
+  id: string;
+  ownerId: string;
+  category: CreateDraftCategory;
+  title: string;
+  content: string;
+  inferenceSource?: HybridInferenceSource;
   createdAt?: unknown;
   updatedAt?: unknown;
 }

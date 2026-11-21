@@ -12,7 +12,15 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
-import { LogIn, LogOut, Moon, Sun } from 'lucide-react';
+import {
+  Cpu,
+  LogIn,
+  LogOut,
+  Moon,
+  Shield,
+  Sun,
+  WifiOff,
+} from 'lucide-react';
 import {
   auth,
   db,
@@ -20,16 +28,26 @@ import {
   handleFirestoreError,
   OperationType,
 } from './firebase';
-import { SessionTab } from './types';
-import { ErrorBoundary } from './components/ErrorBoundary';
+import {
+  getHybridRuntimeStatus,
+  subscribeHybridRuntimeStatus,
+} from './services/hybridAi';
+import {
+  HybridRuntimeStatus,
+  InferenceModePreference,
+  SessionTab,
+} from './types';
+import { AccountPrivacyModal } from './components/AccountPrivacyModal';
 import { ChatSession } from './components/ChatSession';
+import { CreateSession } from './components/CreateSession';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { HybridSettingsModal } from './components/HybridSettingsModal';
 import { LearnSession } from './components/LearnSession';
-import { CodingSession } from './components/CodingSession';
 
 const SESSIONS: Array<{ id: SessionTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'learn', label: 'Learn' },
-  { id: 'coding', label: 'Coding' },
+  { id: 'create', label: 'Create' },
 ];
 
 export default function App() {
@@ -38,6 +56,18 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(false);
+
+  const [inferenceMode, setInferenceMode] =
+    useState<InferenceModePreference>('prefer_on_device');
+  const [hybridStatus, setHybridStatus] = useState<HybridRuntimeStatus>(() =>
+    getHybridRuntimeStatus()
+  );
+  const [hybridSettingsOpen, setHybridSettingsOpen] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+
+  useEffect(() => {
+    return subscribeHybridRuntimeStatus(setHybridStatus);
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -136,28 +166,37 @@ export default function App() {
     }
   };
 
+  const hybridSummaryText = !hybridStatus.online
+    ? 'Offline'
+    : hybridStatus.deviceModelReady
+      ? 'On-device ready'
+      : hybridStatus.onDeviceAvailability === 'downloadable'
+        ? 'Download local model'
+        : 'Cloud fallback';
+
   return (
     <ErrorBoundary>
       <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-        {/* Three-Zone Top Bar Contract */}
-        <header className="h-16 px-4 sm:px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-8 sticky top-0 z-30">
+        {/* Three-Zone Top Bar Contract — Strictly 3 Main Sections: Chat, Learn, Create */}
+        <header className="h-16 px-4 sm:px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4 sm:gap-8 sticky top-0 z-30">
           {/* Zone 1: Single-line Brand Wordmark */}
           <button
             type="button"
             onClick={() => setActiveSession('chat')}
-            className="text-xl font-bold font-display tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
+            className="text-lg sm:text-xl font-bold font-display tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
           >
-            Nimo
+            NIMO AI
           </button>
 
-          {/* Zone 2: Exactly 3 Main Sessions (Chat, Learn, Coding) */}
-          <nav aria-label="Primary sessions" className="flex items-center gap-6 sm:gap-8 h-full">
+          {/* Zone 2: Exactly 3 Primary Navigation Sections (Chat, Learn, Create) */}
+          <nav aria-label="Primary sessions" className="flex items-center gap-5 sm:gap-8 h-full">
             {SESSIONS.map((tab) => {
               const active = activeSession === tab.id;
               return (
                 <button
                   key={tab.id}
                   type="button"
+                  aria-current={active ? 'page' : undefined}
                   onClick={() => setActiveSession(tab.id)}
                   className={`relative h-full inline-flex items-center text-sm font-medium transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                     active
@@ -171,8 +210,36 @@ export default function App() {
             })}
           </nav>
 
-          {/* Zone 3: Theme & Account Action */}
-          <div className="flex items-center gap-2.5 shrink-0">
+          {/* Zone 3: Hybrid Runtime Control, Privacy, Theme & Account Action */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setHybridSettingsOpen(true)}
+              aria-label="Open Hybrid AI runtime settings"
+              className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
+            >
+              {!hybridStatus.online ? (
+                <WifiOff className="w-3.5 h-3.5 text-amber-500" />
+              ) : (
+                <Cpu
+                  className={`w-3.5 h-3.5 ${
+                    hybridStatus.deviceModelReady ? 'text-emerald-500' : 'text-sky-500'
+                  }`}
+                />
+              )}
+              <span>{hybridSummaryText}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setPrivacyOpen(true)}
+              aria-label="Privacy and account data controls"
+              title="Privacy & Data Controls"
+              className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            >
+              <Shield className="w-4 h-4" />
+            </button>
+
             <button
               type="button"
               onClick={toggleTheme}
@@ -185,7 +252,7 @@ export default function App() {
             {!authReady ? (
               <span className="text-xs text-slate-400 whitespace-nowrap">Loading...</span>
             ) : user ? (
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2">
                 {user.photoURL && (
                   <img
                     src={user.photoURL}
@@ -194,26 +261,26 @@ export default function App() {
                     className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700"
                   />
                 )}
-                <span className="hidden sm:inline text-xs font-medium text-slate-700 dark:text-slate-200 max-w-[120px] truncate">
+                <span className="hidden sm:inline text-xs font-medium text-slate-700 dark:text-slate-200 max-w-[110px] truncate">
                   {user.displayName || 'Learner'}
                 </span>
                 <button
                   type="button"
                   onClick={handleSignOut}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
                 >
                   <LogOut className="w-3.5 h-3.5" />
-                  Sign out
+                  <span className="hidden sm:inline">Sign out</span>
                 </button>
               </div>
             ) : (
               <button
                 type="button"
                 onClick={handleSignIn}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-slate-900 dark:bg-sky-600 hover:bg-slate-800 dark:hover:bg-sky-700 text-white transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium rounded-lg bg-slate-900 dark:bg-sky-600 hover:bg-slate-800 dark:hover:bg-sky-700 text-white transition-colors whitespace-nowrap shrink-0"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                Sign in with Google
+                <span>Sign in</span>
               </button>
             )}
           </div>
@@ -234,15 +301,45 @@ export default function App() {
 
         <main className="flex-1 flex flex-col">
           {activeSession === 'chat' && (
-            <ChatSession user={user} onRequireSignIn={handleSignIn} />
+            <ChatSession
+              user={user}
+              onRequireSignIn={handleSignIn}
+              inferenceMode={inferenceMode}
+              onInferenceModeChange={setInferenceMode}
+              onOpenHybridSettings={() => setHybridSettingsOpen(true)}
+            />
           )}
           {activeSession === 'learn' && (
-            <LearnSession user={user} onRequireSignIn={handleSignIn} />
+            <LearnSession
+              user={user}
+              onRequireSignIn={handleSignIn}
+              inferenceMode={inferenceMode}
+              onOpenHybridSettings={() => setHybridSettingsOpen(true)}
+            />
           )}
-          {activeSession === 'coding' && (
-            <CodingSession user={user} onRequireSignIn={handleSignIn} />
+          {activeSession === 'create' && (
+            <CreateSession
+              user={user}
+              onRequireSignIn={handleSignIn}
+              inferenceMode={inferenceMode}
+            />
           )}
         </main>
+
+        <HybridSettingsModal
+          open={hybridSettingsOpen}
+          onClose={() => setHybridSettingsOpen(false)}
+          status={hybridStatus}
+          mode={inferenceMode}
+          onModeChange={setInferenceMode}
+        />
+
+        <AccountPrivacyModal
+          open={privacyOpen}
+          onClose={() => setPrivacyOpen(false)}
+          user={user}
+          onRequireReauth={handleSignIn}
+        />
       </div>
     </ErrorBoundary>
   );

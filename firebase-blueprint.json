@@ -66,7 +66,7 @@
     },
     "ChatThread": {
       "title": "ChatThread",
-      "description": "Multi-turn Nimo conversation thread owned by a single user.",
+      "description": "Multi-turn NIMO AI conversation thread owned by a single user.",
       "type": "object",
       "properties": {
         "ownerId": {
@@ -82,8 +82,17 @@
         },
         "modelMode": {
           "type": "string",
-          "enum": ["fast", "balanced", "thinking", "vision"],
-          "maxLength": 20
+          "enum": [
+            "prefer_on_device",
+            "only_on_device",
+            "prefer_in_cloud",
+            "only_in_cloud",
+            "fast",
+            "balanced",
+            "thinking",
+            "vision"
+          ],
+          "maxLength": 32
         },
         "createdAt": {
           "type": "string",
@@ -98,7 +107,7 @@
     },
     "ChatMessage": {
       "title": "ChatMessage",
-      "description": "Single message inside a Nimo chat thread.",
+      "description": "Single message inside a NIMO AI chat thread.",
       "type": "object",
       "properties": {
         "ownerId": {
@@ -126,6 +135,14 @@
         "modelUsed": {
           "type": "string",
           "maxLength": 64
+        },
+        "inferenceSource": {
+          "type": "string",
+          "enum": ["on_device", "in_cloud", "server_multimodal", "user"],
+          "maxLength": 32
+        },
+        "latencyMs": {
+          "type": "integer"
         },
         "hasImage": {
           "type": "boolean"
@@ -300,6 +317,48 @@
         }
       },
       "required": ["ownerId", "title", "language", "code", "lastOutput", "createdAt", "updatedAt"]
+    },
+    "CreateDraft": {
+      "title": "CreateDraft",
+      "description": "Saved writing, rewrite, brainstorm, or planning artifact from the Create section.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["writing", "rewrite", "brainstorm", "plan"],
+          "maxLength": 24
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30000
+        },
+        "inferenceSource": {
+          "type": "string",
+          "enum": ["on_device", "in_cloud"],
+          "maxLength": 24
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "category", "title", "content", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -313,7 +372,7 @@
     },
     "/chatThreads/{threadId}": {
       "schema": { "$ref": "#/entities/ChatThread" },
-      "description": "User-owned multi-turn Nimo chat threads."
+      "description": "User-owned multi-turn NIMO AI chat threads."
     },
     "/chatThreads/{threadId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/ChatMessage" },
@@ -334,6 +393,10 @@
     "/codeSnippets/{snippetId}": {
       "schema": { "$ref": "#/entities/CodeSnippet" },
       "description": "Saved code workbench snippets."
+    },
+    "/createDrafts/{draftId}": {
+      "schema": { "$ref": "#/entities/CreateDraft" },
+      "description": "Saved writing, planning, and brainstorming creations."
     }
   }
 }
