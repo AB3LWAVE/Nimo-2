@@ -19,6 +19,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  FileUp,
   GraduationCap,
   Headphones,
   Languages,
@@ -33,6 +34,7 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { generateHybridJson, generateHybridText } from '../services/hybridAi';
@@ -191,7 +193,19 @@ export function LearnSession({
   // Quiz State
   const [quizTopic, setQuizTopic] = useState('Cellular Respiration & ATP');
   const [quizDifficulty, setQuizDifficulty] = useState<ProficiencyLevel>('Intermediate');
-  const [quizCount, setQuizCount] = useState(4);
+  const [quizCount, setQuizCount] = useState<string>('4');
+  const [quizInstructions, setQuizInstructions] = useState('');
+  const [quizFiles, setQuizFiles] = useState<
+    Array<{
+      id: string;
+      name: string;
+      kind: 'text' | 'binary';
+      textContent?: string;
+      base64?: string;
+      mimeType?: string;
+    }>
+  >([]);
+  const quizFileInputRef = useRef<HTMLInputElement | null>(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizTitle, setQuizTitle] = useState('');
   const [quizMeta, setQuizMeta] = useState<HybridMetaTag | null>(null);
@@ -733,9 +747,101 @@ Include exactly 3 questions with 4 options each.`;
     }
   };
 
+  const handleQuizFilesSelected = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setNotesError(null);
+    const textExtensions = [
+      '.txt',
+      '.md',
+      '.markdown',
+      '.csv',
+      '.json',
+      '.js',
+      '.ts',
+      '.tsx',
+      '.jsx',
+      '.py',
+      '.html',
+      '.css',
+      '.xml',
+      '.yaml',
+      '.yml',
+      '.sql',
+      '.log',
+    ];
+
+    const added: Array<{
+      id: string;
+      name: string;
+      kind: 'text' | 'binary';
+      textContent?: string;
+      base64?: string;
+      mimeType?: string;
+    }> = [];
+
+    for (const file of Array.from(fileList)) {
+      const lowerName = file.name.toLowerCase();
+      const isTextFile =
+        file.type.startsWith('text/') ||
+        textExtensions.some((ext) => lowerName.endsWith(ext));
+      const isBinarySupported =
+        file.type.startsWith('image/') ||
+        file.type === 'application/pdf' ||
+        lowerName.endsWith('.pdf');
+
+      try {
+        if (isTextFile) {
+          const textContent = (await file.text()).slice(0, 60000);
+          added.push({
+            id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            name: file.name,
+            kind: 'text',
+            textContent,
+          });
+        } else if (isBinarySupported) {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(new Error(`Failed to read ${file.name}.`));
+            reader.readAsDataURL(file);
+          });
+          const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+          const mimeType =
+            file.type || (lowerName.endsWith('.pdf') ? 'application/pdf' : 'image/png');
+          added.push({
+            id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            name: file.name,
+            kind: 'binary',
+            base64,
+            mimeType,
+          });
+        } else {
+          const fallbackText = (await file.text()).slice(0, 60000);
+          added.push({
+            id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            name: file.name,
+            kind: 'text',
+            textContent: fallbackText,
+          });
+        }
+      } catch (err) {
+        setNotesError(
+          err instanceof Error ? err.message : `Could not read uploaded file ${file.name}.`
+        );
+      }
+    }
+
+    if (added.length > 0) {
+      setQuizFiles((prev) => [...prev, ...added]);
+    }
+    if (quizFileInputRef.current) {
+      quizFileInputRef.current.value = '';
+    }
+  };
+
   // General Learning: Quiz Generator & Grader via Firebase AI Logic Hybrid Inference
   const generateQuiz = async () => {
-    if (!quizTopic.trim() || quizLoading) return;
+    if ((!quizTopic.trim() && quizFiles.length === 0) || quizLoading) return;
     setNotesError(null);
     setQuizLoading(true);
     setQuizSubmitted(false);
@@ -744,10 +850,37 @@ Include exactly 3 questions with 4 options each.`;
     setShortGrades({});
     setDeepExplainMap({});
 
-    const safeCount = Math.min(Math.max(Number(quizCount) || 4, 3), 8);
-    const prompt = `Generate a ${safeCount}-question ${quizDifficulty}-level quiz on "${quizTopic}" (subject: ${subject}).
-Mix multiple-choice ("mcq", exactly 4 options) and 1 short-answer ("short") practice question.
-Return ONLY valid JSON with exact structure:
+    const parsedCount = Math.floor(Number(quizCount));
+    const requestedCount =
+      Number.isFinite(parsedCount) && parsedCount >= 1 ? parsedCount : 4;
+    const topicLabel =
+      quizTopic.trim() ||
+      (quizFiles.length > 0 ? quizFiles.map((f) => f.name).join(', ') : 'Study Quiz');
+
+    const textAttachments = quizFiles
+      .filter((f) => f.kind === 'text' && f.textContent)
+      .map((f) => `--- Uploaded File: ${f.name} ---\n${f.textContent}`)
+      .join('\n\n');
+    const binaryAttachment = quizFiles.find(
+      (f) => f.kind === 'binary' && f.base64 && f.mimeType
+    );
+
+    const prompt = [
+      `Generate a ${requestedCount}-question ${quizDifficulty}-level quiz${
+        quizTopic.trim()
+          ? ` on "${quizTopic.trim()}"`
+          : ' based on the uploaded study material'
+      } (subject: ${subject}).`,
+      quizInstructions.trim()
+        ? `Additional instructions from the user on how to generate the questions:\n${quizInstructions.trim()}`
+        : 'Mix multiple-choice ("mcq", exactly 4 options) and 1 short-answer ("short") practice question.',
+      textAttachments
+        ? `Reference material from uploaded file(s):\n${textAttachments}`
+        : '',
+      binaryAttachment
+        ? `Use the attached file (${binaryAttachment.name}) as primary source material when creating questions.`
+        : '',
+      `Return ONLY valid JSON with exact structure:
 {
   "title": "Quiz title",
   "questions": [
@@ -767,7 +900,10 @@ Return ONLY valid JSON with exact structure:
       "explanation": "Clear explanation"
     }
   ]
-}`;
+}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
 
     try {
       const { data, meta } = await generateHybridJson<GeneratedQuiz>({
@@ -775,7 +911,12 @@ Return ONLY valid JSON with exact structure:
         mode: inferenceMode,
         systemInstruction:
           'You are Nimo, an educational assessment designer. Return strict valid JSON only.',
-        validator: (raw) => validateQuizPayload(raw, quizTopic),
+        image:
+          binaryAttachment?.base64 && binaryAttachment?.mimeType
+            ? { base64: binaryAttachment.base64, mimeType: binaryAttachment.mimeType }
+            : undefined,
+        timeoutMs: requestedCount > 15 ? 120000 : 45000,
+        validator: (raw) => validateQuizPayload(raw, topicLabel),
         requestKey: 'learn-quiz-gen',
       });
       setQuizTitle(data.title);
@@ -1709,58 +1850,120 @@ Return ONLY valid JSON with exact structure:
             {generalActivity === 'quiz' && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 <div className="lg:col-span-8 space-y-5">
-                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
-                    <div className="sm:col-span-2">
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                        Quiz Topic
-                      </label>
-                      <input
-                        type="text"
-                        value={quizTopic}
-                        onChange={(e) => setQuizTopic(e.target.value)}
-                        placeholder="e.g. Linear Algebra, World War II, Python Lists"
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                      />
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                          Quiz Topic
+                        </label>
+                        <input
+                          type="text"
+                          value={quizTopic}
+                          onChange={(e) => setQuizTopic(e.target.value)}
+                          placeholder="e.g. Linear Algebra, World War II, or leave blank with uploaded files"
+                          className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                          Difficulty &amp; Questions
+                        </label>
+                        <div className="flex gap-1.5">
+                          <select
+                            value={quizDifficulty}
+                            onChange={(e) => setQuizDifficulty(e.target.value as ProficiencyLevel)}
+                            className="flex-1 px-2 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                          >
+                            {LEVELS.map((l) => (
+                              <option key={l} value={l}>
+                                {l}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            aria-label="Number of quiz questions"
+                            value={quizCount}
+                            onChange={(e) => setQuizCount(e.target.value)}
+                            placeholder="Count"
+                            className="w-20 px-2 py-2 text-xs font-mono tabular-nums rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={generateQuiz}
+                        disabled={quizLoading || (!quizTopic.trim() && quizFiles.length === 0)}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white transition-colors whitespace-nowrap"
+                      >
+                        {quizLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+                        Generate Quiz
+                      </button>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                        Difficulty &amp; Count
-                      </label>
-                      <div className="flex gap-1.5">
-                        <select
-                          value={quizDifficulty}
-                          onChange={(e) => setQuizDifficulty(e.target.value as ProficiencyLevel)}
-                          className="flex-1 px-2 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1 items-start">
+                      <div className="sm:col-span-8">
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                          Additional Instructions for AI (Optional)
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={quizInstructions}
+                          onChange={(e) => setQuizInstructions(e.target.value)}
+                          placeholder="e.g. Make all questions multiple-choice, focus on practical scenarios, test formulas and edge cases..."
+                          className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white resize-y"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-4 space-y-2">
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                          Study Files (Optional)
+                        </label>
+                        <input
+                          ref={quizFileInputRef}
+                          type="file"
+                          multiple
+                          accept=".txt,.md,.markdown,.csv,.json,.pdf,.py,.js,.ts,.tsx,.jsx,.html,.css,.xml,.yaml,.yml,.sql,.log,image/*"
+                          onChange={(e) => void handleQuizFilesSelected(e.target.files)}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => quizFileInputRef.current?.click()}
+                          className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                         >
-                          {LEVELS.map((l) => (
-                            <option key={l} value={l}>
-                              {l}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={quizCount}
-                          onChange={(e) => setQuizCount(Number(e.target.value))}
-                          className="w-16 px-2 py-2 text-xs font-mono tabular-nums rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                        >
-                          <option value={3}>3 Q</option>
-                          <option value={4}>4 Q</option>
-                          <option value={6}>6 Q</option>
-                          <option value={8}>8 Q</option>
-                        </select>
+                          <FileUp className="w-3.5 h-3.5" />
+                          Upload Files (.txt, .md, .pdf, images)
+                        </button>
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={generateQuiz}
-                      disabled={quizLoading}
-                      className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white transition-colors whitespace-nowrap"
-                    >
-                      {quizLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                      Generate Quiz
-                    </button>
+                    {quizFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {quizFiles.map((file) => (
+                          <span
+                            key={file.id}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-700 dark:text-slate-200"
+                          >
+                            <span className="truncate max-w-[200px]">{file.name}</span>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${file.name}`}
+                              onClick={() =>
+                                setQuizFiles((prev) => prev.filter((f) => f.id !== file.id))
+                              }
+                              className="text-slate-400 hover:text-red-500"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {quizQuestions.length === 0 ? (

@@ -112,8 +112,8 @@ service cloud.firestore {
         && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
         && data.topic is string && data.topic.size() >= 1 && data.topic.size() <= 140
         && data.difficulty is string && data.difficulty in ['Beginner', 'Intermediate', 'Advanced']
-        && data.score is int && data.score >= 0 && data.score <= 50
-        && data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 50
+        && data.score is int && data.score >= 0
+        && data.totalQuestions is int && data.totalQuestions >= 1
         && data.score <= data.totalQuestions
         && data.summaryText is string && data.summaryText.size() <= 4000
         && data.createdAt is timestamp;
