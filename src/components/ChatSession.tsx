@@ -227,7 +227,7 @@ export function ChatSession({
     try {
       await setDoc(threadRef, {
         ownerId: user.uid,
-        title: 'New NIMO AI Chat',
+        title: 'New Nimo Chat',
         modelMode: inferenceMode,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -345,7 +345,7 @@ export function ChatSession({
           const newTitle =
             displayedMessages.length === 0
               ? promptText.slice(0, 80) || 'Image Analysis'
-              : threads.find((t) => t.id === threadId)?.title || 'NIMO AI Chat';
+              : threads.find((t) => t.id === threadId)?.title || 'Nimo Chat';
           await updateDoc(doc(db, 'chatThreads', threadId), {
             title: newTitle.slice(0, 140),
             modelMode: inferenceMode,
@@ -383,7 +383,7 @@ export function ChatSession({
         history,
         mode: effectiveMode,
         systemInstruction:
-          'You are NIMO AI, a sharp, accurate, and encouraging AI companion. Give clear, structured responses with markdown and fenced code blocks when helpful.',
+          'You are Nimo, a sharp, accurate, and encouraging AI companion. Give clear, structured responses with markdown and fenced code blocks when helpful.',
         image: image ? { base64: image.base64, mimeType: image.mimeType } : undefined,
         requestKey: 'chat-send',
       });
@@ -569,7 +569,7 @@ export function ChatSession({
         {!user ? (
           <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 space-y-2.5">
             <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-              Sign in with Google to sync your NIMO AI threads to Firestore across sessions.
+              Sign in with Google to sync your Nimo threads to Firestore across sessions.
             </p>
             <button
               type="button"
@@ -581,7 +581,7 @@ export function ChatSession({
           </div>
         ) : threads.length === 0 ? (
           <p className="px-2 py-6 text-xs text-slate-500 dark:text-slate-400 text-center">
-            No saved threads yet. Start a conversation with NIMO AI.
+            No saved threads yet. Start a conversation with Nimo.
           </p>
         ) : (
           threads.map((thread) => {
@@ -724,7 +724,7 @@ export function ChatSession({
               <div className="py-10 space-y-6">
                 <div className="space-y-2">
                   <h1 className="text-2xl sm:text-3xl font-bold font-display text-slate-900 dark:text-white">
-                    Ask NIMO AI anything
+                    Ask Nimo anything
                   </h1>
                   <p className="text-[15px] text-slate-600 dark:text-slate-400 max-w-2xl">
                     Powered by Firebase AI Logic Hybrid Inference: runs locally on Chrome&apos;s on-device Gemini Nano when available or seamlessly routes to Firebase Cloud, with multimodal image upload and optional voice playback.
@@ -761,7 +761,7 @@ export function ChatSession({
                   >
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1.5 px-1">
                       <span className="font-medium text-slate-700 dark:text-slate-300">
-                        {isUser ? 'You' : 'NIMO AI'}
+                        {isUser ? 'You' : 'Nimo'}
                       </span>
                       {!isUser && (
                         <InferenceBadge
@@ -857,7 +857,7 @@ export function ChatSession({
             {sending && (
               <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                 <Loader2 className="w-4 h-4 animate-spin text-sky-600" />
-                <span>NIMO AI is running hybrid inference...</span>
+                <span>Nimo is running hybrid inference...</span>
               </div>
             )}
 
@@ -993,7 +993,7 @@ export function ChatSession({
                 placeholder={
                   recording
                     ? 'Recording audio... click Stop to transcribe'
-                    : 'Message NIMO AI, attach an image, or dictate...'
+                    : 'Message Nimo, attach an image, or dictate...'
                 }
                 className="flex-1 resize-none rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
               />

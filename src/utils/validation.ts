@@ -68,7 +68,7 @@ export function extractAndParseJson<T = unknown>(rawText: string): T {
     }
   }
 
-  throw new Error('NIMO AI returned malformed JSON. Please retry the generation.');
+  throw new Error('Nimo returned malformed JSON. Please retry the generation.');
 }
 
 export function validateQuizPayload(raw: unknown, fallbackTitle: string): GeneratedQuiz {

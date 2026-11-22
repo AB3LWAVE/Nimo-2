@@ -914,7 +914,7 @@ async function startServer() {
   server.listen(port, '0.0.0.0', () => {
     if (!hasConfiguredServerGeminiKey()) {
       console.warn(
-        '[NIMO AI] GEMINI_API_KEY is not configured; server audio TTS/STT and Live Voice endpoints will return a setup error while Firebase AI Logic Hybrid Inference runs via client SDK.'
+        '[Nimo] GEMINI_API_KEY is not configured; server audio TTS/STT and Live Voice endpoints will return a setup error while Firebase AI Logic Hybrid Inference runs via client SDK.'
       );
     }
     console.log(`Nimo server running on http://0.0.0.0:${port}`);

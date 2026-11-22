@@ -29,7 +29,7 @@ const configuredCloudModel =
 
 if (typeof window !== 'undefined' && !configuredCloudModel) {
   console.info(
-    '[NIMO AI] Optional VITE_HYBRID_CLOUD_MODEL not set; using default cloud fallback model "gemini-3.5-flash-lite".'
+    '[Nimo] Optional VITE_HYBRID_CLOUD_MODEL not set; using default cloud fallback model "gemini-3.5-flash-lite".'
   );
 }
 
@@ -109,10 +109,15 @@ export function mapAiError(
     };
   }
 
-  if (lower.includes('app check') || lower.includes('appcheck') || lower.includes('403')) {
+  if (
+    lower.includes('app check') ||
+    lower.includes('appcheck') ||
+    lower.includes('401') ||
+    lower.includes('403')
+  ) {
     return {
       message:
-        'Request blocked by Firebase App Check or project permissions (403). Verify your reCAPTCHA site key or register your local App Check debug token in Firebase Console.',
+        'Request blocked by Firebase App Check or project permissions (401/403). Configure VITE_RECAPTCHA_SITE_KEY or register your local App Check debug token in Firebase Console.',
       retryable: false,
       code: 'app_check_or_403',
     };
@@ -162,6 +167,7 @@ export function shouldUseServerHybridFallback(
     lower.includes('app check') ||
     lower.includes('appcheck') ||
     lower.includes('permission_denied') ||
+    lower.includes('401') ||
     lower.includes('403') ||
     lower.includes('404')
   );

@@ -185,7 +185,7 @@ export default function App() {
             onClick={() => setActiveSession('chat')}
             className="text-lg sm:text-xl font-bold font-display tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
           >
-            NIMO AI
+            Nimo
           </button>
 
           {/* Zone 2: Exactly 3 Primary Navigation Sections (Chat, Learn, Create) */}

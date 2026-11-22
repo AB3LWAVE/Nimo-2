@@ -102,7 +102,7 @@ export function AccountPrivacyModal({
         <div className="p-5 space-y-4 text-sm">
           <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 space-y-2 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
             <p className="font-semibold text-slate-800 dark:text-slate-100">
-              How NIMO AI processes your data
+              How Nimo processes your data
             </p>
             <ul className="list-disc pl-4 space-y-1">
               <li>

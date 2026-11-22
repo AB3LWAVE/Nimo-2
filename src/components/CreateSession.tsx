@@ -269,7 +269,7 @@ export function CreateSession({
         prompt: fullPrompt,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, an editorial writing partner. Return clean markdown ready to publish or edit, without meta preamble.',
+          'You are Nimo, an editorial writing partner. Return clean markdown ready to publish or edit, without meta preamble.',
         requestKey: 'create-write',
       });
       setDraftContent(result.text.slice(0, 30000));
@@ -300,7 +300,7 @@ export function CreateSession({
         prompt,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, a strategic product planner and creative partner. Output crisp markdown sections and checklists.',
+          'You are Nimo, a strategic product planner and creative partner. Output crisp markdown sections and checklists.',
         requestKey: 'create-brainstorm',
       });
       setDraftContent(result.text.slice(0, 30000));
@@ -410,7 +410,7 @@ export function CreateSession({
       return;
     }
 
-    setOutput('Tracing expected output via NIMO AI Hybrid Inference...');
+    setOutput('Tracing expected output via Nimo Hybrid Inference...');
     try {
       const result = await generateHybridText({
         prompt: `Trace this ${language} snippet and show the exact expected console/query output concisely.\n\n\`\`\`${language}\n${code}\n\`\`\``,
@@ -504,7 +504,7 @@ export function CreateSession({
         prompt: fullPrompt,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, a senior staff software engineer and coding mentor. Be precise and provide clean fenced code blocks.',
+          'You are Nimo, a senior staff software engineer and coding mentor. Be precise and provide clean fenced code blocks.',
         image: attachedImage
           ? { base64: attachedImage.base64, mimeType: attachedImage.mimeType }
           : undefined,
@@ -1066,12 +1066,12 @@ export function CreateSession({
                 </div>
               </div>
 
-              {/* Right 5 Cols: NIMO AI Coding Mentor */}
+              {/* Right 5 Cols: Nimo Coding Mentor */}
               <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col min-h-[540px]">
                 <div className="p-4 border-b border-slate-200 dark:border-slate-800 space-y-3">
                   <div>
                     <h2 className="text-base font-semibold font-display text-slate-900 dark:text-white">
-                      NIMO AI Coding Assistant
+                      Nimo Coding Assistant
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
                       Quick fixes, step-by-step explanation, deep debugging, refactoring, or screenshot-to-code via Firebase AI Logic Hybrid Inference.
@@ -1173,7 +1173,7 @@ export function CreateSession({
                     </div>
                   ) : (
                     <p className="text-sm text-slate-500 dark:text-slate-400 py-10 text-center">
-                      Select an action above, attach an error/UI screenshot, or ask NIMO AI about your code.
+                      Select an action above, attach an error/UI screenshot, or ask Nimo about your code.
                     </p>
                   )}
                 </div>
@@ -1229,7 +1229,7 @@ export function CreateSession({
                       type="text"
                       value={mentorPrompt}
                       onChange={(e) => setMentorPrompt(e.target.value)}
-                      placeholder="Ask NIMO AI about this snippet..."
+                      placeholder="Ask Nimo about this snippet..."
                       className="flex-1 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
                     />
                     <button

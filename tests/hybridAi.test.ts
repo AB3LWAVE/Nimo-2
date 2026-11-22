@@ -10,7 +10,7 @@ import {
   toSdkInferenceMode,
 } from '../src/services/hybridAi.ts';
 
-test('toSdkInferenceMode maps NIMO AI preferences to official firebase/ai InferenceMode enum', () => {
+test('toSdkInferenceMode maps Nimo preferences to official firebase/ai InferenceMode enum', () => {
   assert.equal(toSdkInferenceMode('prefer_on_device'), InferenceMode.PREFER_ON_DEVICE);
   assert.equal(toSdkInferenceMode('only_on_device'), InferenceMode.ONLY_ON_DEVICE);
   assert.equal(toSdkInferenceMode('prefer_in_cloud'), InferenceMode.PREFER_IN_CLOUD);

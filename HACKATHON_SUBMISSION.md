@@ -1,9 +1,9 @@
-# NIMO AI — Firebase #BuildHybridAI 2026 Hackathon Submission Package
+# Nimo — Firebase #BuildHybridAI 2026 Hackathon Submission Package
 
 ## A. Project Description
 
 ### Project Name
-**NIMO AI**
+**Nimo**
 
 ### One-Line Tagline
 A three-session hybrid AI workspace for Chat, Audio-Enabled Learning & Quizzes, and Creation (Writing, Planning & Coding), powered by Firebase AI Logic Hybrid Inference.
@@ -12,7 +12,7 @@ A three-session hybrid AI workspace for Chat, Audio-Enabled Learning & Quizzes, 
 Learners, students, and builders switch constantly between fragmented AI chat tools, language apps, quiz generators, and coding editors—while paying a privacy, latency, and offline penalty whenever every keystroke must round-trip to cloud servers. Conversely, pure on-device browser models cannot handle heavy multimodal payloads or work across all browsers yet.
 
 ### Solution & Hybrid AI Architecture
-**NIMO AI** unifies the entire workflow inside **three focused sessions—Chat, Learn, and Create—backed by `firebase/ai` Hybrid Inference**:
+**Nimo** unifies the entire workflow inside **three focused sessions—Chat, Learn, and Create—backed by `firebase/ai` Hybrid Inference**:
 
 - **Real Firebase AI Logic Hybrid Inference (`src/services/hybridAi.ts`)**:
   - Initializes `getAI(app, { backend: new GoogleAIBackend() })` after Firebase App Check (`initializeAppCheck`).
@@ -26,7 +26,7 @@ Learners, students, and builders switch constantly between fragmented AI chat to
 - **Create**:
   - *Write & Rewrite*: Draft, rewrite, condense, expand, and proofread in multiple tones with Firestore `createDrafts` persistence.
   - *Brainstorm & Plan*: Generate structured execution plans and idea lists saved to `createDrafts`.
-  - *Code Studio*: Multi-language editor with in-browser JS execution, sandboxed HTML preview, AI execution tracing, Firestore `codeSnippets` sync, and NIMO AI debugging/refactoring.
+  - *Code Studio*: Multi-language editor with in-browser JS execution, sandboxed HTML preview, AI execution tracing, Firestore `codeSnippets` sync, and Nimo debugging/refactoring.
 - **Security & Privacy**:
   - Strict owner-isolated `firestore.rules` validated with `@firebase/eslint-plugin-security-rules`.
   - In-app **Privacy & Data Controls** modal disclosing local vs cloud vs speech processing and enabling one-click deletion of all user Firestore records and Firebase Auth account.
@@ -38,8 +38,8 @@ Learners, students, and builders switch constantly between fragmented AI chat to
 **Target Duration**: 2:55 (max 3:00)
 
 - **0:00 – 0:25 | Intro & Architecture Overview**
-  - *Screen*: NIMO AI header (`Chat`, `Learn`, `Create`), click **Hybrid Setup** button.
-  - *Voiceover*: "Hi, I'm presenting NIMO AI for #BuildHybridAI 2026. NIMO AI is a three-session AI learning and creation studio built on Firebase AI Logic Hybrid Inference, Auth, Firestore, and App Check."
+  - *Screen*: Nimo header (`Chat`, `Learn`, `Create`), click **Hybrid Setup** button.
+  - *Voiceover*: "Hi, I'm presenting Nimo for #BuildHybridAI 2026. Nimo is a three-session AI learning and creation studio built on Firebase AI Logic Hybrid Inference, Auth, Firestore, and App Check."
   - *Action*: Show Chrome on-device capability check, `Prefer On-Device` / `On-Device Only` / `Cloud Only` selector, and click **Initialize On-Device Model** (showing progress bar when downloading in Chrome 139+ or capability status).
 - **0:25 – 1:05 | Session 1: Chat (On-Device & Cloud Fallback)**
   - *Screen*: Switch to `Prefer On-Device` or `On-Device Only`, send a prompt in **Chat**.
@@ -47,7 +47,7 @@ Learners, students, and builders switch constantly between fragmented AI chat to
   - *Action*: Point out `InferenceBadge` (`Firebase On-device` / `Firebase Cloud`, `ms`), demonstrate Copy & Regenerate, and open a synced thread in the sidebar.
 - **1:05 – 2:00 | Session 2: Learn (Language Audio + General Learning & Quiz)**
   - *Screen*: Click **Learn** tab.
-  - *Voiceover*: "In Learn, NIMO AI combines hybrid text generation with genuine browser & server speech APIs."
+  - *Voiceover*: "In Learn, Nimo combines hybrid text generation with genuine browser & server speech APIs."
   - *Action*:
     1. In *Language Learning*, generate a Spanish Vocabulary deck, toggle playback speed (`0.75x`), click speaker icon to play pronunciation, and mark a card Mastered.
     2. Switch to *General Learning & Quiz*, generate a 4-question quiz, answer questions, submit to see AI short-answer grading, click **Teach Step-by-Step**, and highlight **Retry Same Quiz** + Firestore Quiz History.
@@ -84,7 +84,7 @@ Learners, students, and builders switch constantly between fragmented AI chat to
 
 ## D. Firebase #BuildHybridAI 2026 Devpost Official Rules Checklist
 
-| Requirement | Status in NIMO AI | Notes |
+| Requirement | Status in Nimo | Notes |
 | --- | --- | --- |
 | Uses Firebase AI Logic Hybrid Inference SDK (`firebase/ai`) | Implemented | `getAI`, `GoogleAIBackend`, `getGenerativeModel`, `InferenceMode`, `InferenceSource`, `initializeDeviceModel` in `src/services/hybridAi.ts` |
 | Genuine Hybrid Routing (`on_device` + `in_cloud` fallback) | Implemented | Transparent `InferenceBadge` reports actual `result.response.inferenceSource` |

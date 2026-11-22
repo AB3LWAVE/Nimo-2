@@ -1,12 +1,12 @@
-# NIMO AI
+# Nimo
 
-**NIMO AI** is a three-session AI learning, conversation, and creation workspace powered by **Firebase AI Logic Hybrid Inference** (`firebase/ai`), **Firebase Authentication**, **Cloud Firestore**, and **Firebase App Check**, with optional Express + WebSocket audio endpoints for speech synthesis, transcription, and live voice tutoring.
+**Nimo** is a three-session AI learning, conversation, and creation workspace powered by **Firebase AI Logic Hybrid Inference** (`firebase/ai`), **Firebase Authentication**, **Cloud Firestore**, and **Firebase App Check**, with optional Express + WebSocket audio endpoints for speech synthesis, transcription, and live voice tutoring.
 
 ---
 
 ## Core Product Architecture
 
-NIMO AI preserves a strict three-section primary navigation bar:
+Nimo preserves a strict three-section primary navigation bar:
 
 1. **Chat**
    - Multi-turn AI conversations synced to Firestore (`chatThreads/{threadId}/messages`).
@@ -26,7 +26,7 @@ NIMO AI preserves a strict three-section primary navigation bar:
 3. **Create**
    - **Write & Rewrite**: Draft new documents or rewrite/condense/expand/proofread text in selectable tones, copy, and save to Firestore (`createDrafts`).
    - **Brainstorm & Plan**: Generate structured idea brainstorms or execution plans/checklists and save to Firestore (`createDrafts`).
-   - **Code Studio**: Interactive code editor with JavaScript sandbox execution, sandboxed HTML live preview, AI execution tracing for TypeScript/Python/SQL/Go/Rust, Firestore persistence (`codeSnippets`), and NIMO AI Coding Assistant (Quick Fix, Explain, Debug Deeply, Refactor, Screenshot-to-Code) via Hybrid Inference.
+   - **Code Studio**: Interactive code editor with JavaScript sandbox execution, sandboxed HTML live preview, AI execution tracing for TypeScript/Python/SQL/Go/Rust, Firestore persistence (`codeSnippets`), and Nimo Coding Assistant (Quick Fix, Explain, Debug Deeply, Refactor, Screenshot-to-Code) via Hybrid Inference.
 
 ---
 
@@ -62,7 +62,7 @@ NIMO AI preserves a strict three-section primary navigation bar:
 3. **Enable On-Device Inference in Chrome Desktop (Optional)**:
    - Open Chrome 139+ on Desktop.
    - Navigate to `chrome://flags/#optimization-guide-on-device-model` and `chrome://flags/#prompt-api-for-gemini-nano`, enable both, and relaunch.
-   - In NIMO AI, click **Hybrid Setup** in the header (or Chat toolbar) and click **Initialize On-Device Model** to trigger the user-activated local model download.
+   - In Nimo, click **Hybrid Setup** in the header (or Chat toolbar) and click **Initialize On-Device Model** to trigger the user-activated local model download.
 
 4. **Run Development Server**:
    ```bash

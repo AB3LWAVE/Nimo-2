@@ -313,7 +313,7 @@ export function LearnSession({
 
     const recentText = updatedHistory
       .slice(-8)
-      .map((m) => `${m.role === 'user' ? 'Learner' : 'NIMO AI'}: ${m.text}`)
+      .map((m) => `${m.role === 'user' ? 'Learner' : 'Nimo'}: ${m.text}`)
       .join('\n');
 
     const prompt = `Target language: ${activeLanguage}
@@ -335,7 +335,7 @@ Return ONLY valid JSON with exact keys:
         prompt,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, a supportive multilingual conversational language tutor. Return strict JSON only.',
+          'You are Nimo, a supportive multilingual conversational language tutor. Return strict JSON only.',
         validator: validateLanguageConversationReply,
         requestKey: 'learn-lang-conv',
       });
@@ -504,7 +504,7 @@ Return ONLY a valid JSON array of 6 objects with exact keys:
         prompt,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, an expert multilingual vocabulary coach. Return valid JSON array only.',
+          'You are Nimo, an expert multilingual vocabulary coach. Return valid JSON array only.',
         validator: validateVocabItems,
         requestKey: 'learn-vocab',
       });
@@ -620,7 +620,7 @@ Include exactly 3 questions with 4 options each.`;
         prompt,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, a language curriculum designer. Return strict JSON only.',
+          'You are Nimo, a language curriculum designer. Return strict JSON only.',
         validator: (raw) => validateListeningExercise(raw, `${activeLanguage}: ${topicText}`),
         requestKey: 'learn-listening',
       });
@@ -655,7 +655,7 @@ Include exactly 3 questions with 4 options each.`;
         prompt,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, a patient academic tutor. Produce crisp, accurate markdown study guides and step-by-step explanations.',
+          'You are Nimo, a patient academic tutor. Produce crisp, accurate markdown study guides and step-by-step explanations.',
         requestKey: 'learn-study',
       });
 
@@ -705,7 +705,7 @@ Include exactly 3 questions with 4 options each.`;
         prompt: `Based on these study notes titled "${activeNote.title}":\n\n${activeNote.summaryMarkdown.slice(0, 4000)}\n\nAnswer the student's follow-up question clearly:\n${question}`,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, answering a student follow-up question clearly and concisely.',
+          'You are Nimo, answering a student follow-up question clearly and concisely.',
         requestKey: 'learn-study-followup',
       });
       setActiveNote((prev) =>
@@ -774,7 +774,7 @@ Return ONLY valid JSON with exact structure:
         prompt,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, an educational assessment designer. Return strict valid JSON only.',
+          'You are Nimo, an educational assessment designer. Return strict valid JSON only.',
         validator: (raw) => validateQuizPayload(raw, quizTopic),
         requestKey: 'learn-quiz-gen',
       });
@@ -866,7 +866,7 @@ Return ONLY valid JSON with exact structure:
         prompt: `Teach step by step (${quizDifficulty} level, subject: ${subject}):\nQuestion: ${q.prompt}\nCore concept: ${q.explanation}`,
         mode: inferenceMode,
         systemInstruction:
-          'You are NIMO AI, a patient step-by-step teacher explaining why the answer works.',
+          'You are Nimo, a patient step-by-step teacher explaining why the answer works.',
         requestKey: `learn-explain-${q.id}`,
       });
       setDeepExplainMap((prev) => ({
@@ -1112,10 +1112,10 @@ Return ONLY valid JSON with exact structure:
                 <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col min-h-[460px]">
                   <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800">
                     <h2 className="text-base font-semibold font-display text-slate-900 dark:text-white">
-                      Conversational Practice with NIMO AI
+                      Conversational Practice with Nimo
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Speak via microphone or type in {activeLanguage}. NIMO AI replies with translations, gentle corrections, and audio playback.
+                      Speak via microphone or type in {activeLanguage}. Nimo replies with translations, gentle corrections, and audio playback.
                     </p>
                   </div>
 
@@ -1129,7 +1129,7 @@ Return ONLY valid JSON with exact structure:
                           type="button"
                           onClick={() =>
                             sendConversationTurn(
-                              `Hello NIMO AI! Let's practice ${level} ${activeLanguage} conversation.`
+                              `Hello Nimo! Let's practice ${level} ${activeLanguage} conversation.`
                             )
                           }
                           className="px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -1195,7 +1195,7 @@ Return ONLY valid JSON with exact structure:
                     {convLoading && (
                       <div className="flex items-center gap-2 text-xs text-slate-500">
                         <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-600" />
-                        <span>NIMO AI is responding...</span>
+                        <span>Nimo is responding...</span>
                       </div>
                     )}
                   </div>

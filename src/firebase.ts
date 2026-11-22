@@ -25,6 +25,9 @@ import {
 import firebaseConfig from '../firebase-applet-config.json';
 import type { AppCheckStatus } from './types';
 
+const DEFAULT_PUBLIC_RECAPTCHA_ENTERPRISE_KEY =
+  '6Ldp2CwuAAAAAMzBAZAW1VKn7gSm3zycawyAyzGF';
+
 const app = initializeApp(firebaseConfig);
 
 let appCheckInstance: AppCheck | null = null;
@@ -42,19 +45,26 @@ if (typeof window !== 'undefined') {
     ) {
       (self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN =
         rawDebugToken.toLowerCase() === 'true' ? true : rawDebugToken;
-      console.info('[NIMO AI] Firebase App Check debug token mode enabled for local/dev testing.');
+      console.info('[Nimo] Firebase App Check debug token mode enabled for local/dev testing.');
     }
   }
 
-  const enterpriseKey = (import.meta.env.VITE_RECAPTCHA_ENTERPRISE_KEY || '').trim();
-  const explicitV3Key = (import.meta.env.VITE_RECAPTCHA_SITE_KEY || '').trim();
-  const v3Key = (explicitV3Key || firebaseConfig.recaptchaSiteKey || '').trim();
+  const explicitEnterpriseKey = (import.meta.env.VITE_RECAPTCHA_ENTERPRISE_KEY || '').trim();
+  const explicitV3Key = (
+    import.meta.env.VITE_RECAPTCHA_SITE_KEY ||
+    firebaseConfig.recaptchaSiteKey ||
+    ''
+  ).trim();
 
-  if (enterpriseKey && explicitV3Key) {
+  if (explicitEnterpriseKey && explicitV3Key) {
     console.warn(
-      '[NIMO AI] Both VITE_RECAPTCHA_ENTERPRISE_KEY and VITE_RECAPTCHA_SITE_KEY are set. Using VITE_RECAPTCHA_ENTERPRISE_KEY; remove the unused key.'
+      '[Nimo] Both VITE_RECAPTCHA_ENTERPRISE_KEY and VITE_RECAPTCHA_SITE_KEY are set. Using VITE_RECAPTCHA_ENTERPRISE_KEY; remove the unused key.'
     );
   }
+
+  const enterpriseKey =
+    explicitEnterpriseKey ||
+    (!explicitV3Key ? DEFAULT_PUBLIC_RECAPTCHA_ENTERPRISE_KEY : '');
 
   try {
     if (enterpriseKey) {
@@ -63,20 +73,20 @@ if (typeof window !== 'undefined') {
         isTokenAutoRefreshEnabled: true,
       });
       detectedAppCheckStatus = 'active-recaptcha-enterprise';
-    } else if (v3Key) {
+    } else if (explicitV3Key) {
       appCheckInstance = initializeAppCheck(app, {
-        provider: new ReCaptchaV3Provider(v3Key),
+        provider: new ReCaptchaV3Provider(explicitV3Key),
         isTokenAutoRefreshEnabled: true,
       });
       detectedAppCheckStatus = 'active-recaptcha-v3';
     } else {
       detectedAppCheckStatus = 'unconfigured-site-key';
       console.info(
-        '[NIMO AI] Firebase App Check not initialized (optional): set VITE_RECAPTCHA_SITE_KEY or VITE_RECAPTCHA_ENTERPRISE_KEY to enable App Check attestation.'
+        '[Nimo] Firebase App Check not initialized (optional): set VITE_RECAPTCHA_ENTERPRISE_KEY or VITE_RECAPTCHA_SITE_KEY to enable App Check attestation.'
       );
     }
   } catch (err) {
-    console.warn('[NIMO AI] Firebase App Check initialization warning:', err);
+    console.warn('[Nimo] Firebase App Check initialization warning:', err);
     detectedAppCheckStatus = 'error';
   }
 }
