@@ -1132,22 +1132,18 @@ Include exactly 3 questions with 4 options each.`;
                   <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
                     Proficiency Level
                   </label>
-                  <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-800">
+                  <select
+                    aria-label="Proficiency Level"
+                    value={level}
+                    onChange={(e) => setLevel(e.target.value as ProficiencyLevel)}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  >
                     {LEVELS.map((lvl) => (
-                      <button
-                        key={lvl}
-                        type="button"
-                        onClick={() => setLevel(lvl)}
-                        className={`px-2 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                          level === lvl
-                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                            : 'text-slate-600 dark:text-slate-300'
-                        }`}
-                      >
+                      <option key={lvl} value={lvl}>
                         {lvl}
-                      </button>
+                      </option>
                     ))}
-                  </div>
+                  </select>
                 </div>
 
                 <div>
