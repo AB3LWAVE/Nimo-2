@@ -98,7 +98,14 @@ export function formatAppCheckExchangeError(
     lower.includes('attestation') ||
     lower.includes('403')
   ) {
+    const activeOrigin =
+      typeof window !== 'undefined' ? window.location.origin : 'server';
+    const modeSummary = devDebugModeEnabled
+      ? 'development debug mode (:exchangeDebugToken)'
+      : 'production reCAPTCHA Enterprise mode (:exchangeRecaptchaEnterpriseToken)';
     const parts = [
+      `mode: ${modeSummary}`,
+      `origin: ${activeOrigin}`,
       code ? `code: ${code}` : '',
       msg ? `raw message: ${msg}` : '',
       combinedHttp
@@ -108,9 +115,9 @@ export function formatAppCheckExchangeError(
           : '',
     ].filter(Boolean);
 
-    const devHint = IS_DEV_MODE
-      ? `In development, copy the "Firebase App Check debug token: <UUID>" printed in your browser console and register it in Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId} -> Manage debug tokens (then refresh).`
-      : `Verify your production reCAPTCHA site key and domain allowlist in Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId}.`;
+    const devHint = devDebugModeEnabled
+      ? `Register the UUID from IndexedDB ("firebase-app-check-database" -> "firebase-app-check-store" -> "debug-token") for this exact origin in Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId} -> Manage debug tokens, then reload. (If Chrome partitions iframe storage across reloads, open the preview URL directly in a tab or set VITE_APPCHECK_DEBUG_TOKEN in .env.local.)`
+      : `This origin is running a production build (not debug mode). Complete the reCAPTCHA Enterprise setup in Google Cloud Console and verify this domain is allowlisted for the site key registered in Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId}.`;
 
     return `Firebase App Check 403 / authentication failure (${parts.join(' | ')}). ${devHint}`;
   }
