@@ -3168,8 +3168,32 @@ Include exactly 3 questions with 4 options each.`;
 
         {/* Stationary ChatGPT-Style Rounded Collapsible Bottom Prompt Bar */}
         {!promptBarHidden && (
-          <div className="shrink-0 px-3 sm:px-6 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#F8F9FB]/95 dark:bg-[#0F1419]/95 backdrop-blur-xs">
-            <div className="max-w-3xl mx-auto space-y-2">
+          <div className="shrink-0 px-3 sm:px-6 pt-1.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#F8F9FB]/95 dark:bg-[#0F1419]/95 backdrop-blur-xs border-t border-slate-200/70 dark:border-slate-800/80">
+            <div className="max-w-3xl mx-auto space-y-1.5">
+              <div className="flex items-center justify-between gap-2 px-1">
+                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  {subMode === 'language'
+                    ? languageActivity === 'speaking'
+                      ? `${activeLanguage} Conversation`
+                      : languageActivity === 'vocabulary'
+                        ? `${activeLanguage} Vocabulary`
+                        : `${activeLanguage} Listening`
+                    : generalActivity === 'quiz'
+                      ? 'Quiz Generator'
+                      : 'Study Notes & Tutor'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPromptBarHidden(true)}
+                  aria-label="Hide prompt bar"
+                  title="Hide prompt bar"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#161C24] text-slate-700 dark:text-slate-200 hover:border-orange-300 dark:hover:border-orange-700 hover:text-orange-600 dark:hover:text-amber-400 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span>Hide</span>
+                </button>
+              </div>
+
               {/* Language -> Speaking Prompt Bar */}
               {subMode === 'language' && languageActivity === 'speaking' && (
                 <form
@@ -3190,32 +3214,19 @@ Include exactly 3 questions with 4 options each.`;
                   />
 
                   <div className="flex items-center justify-between gap-2 pt-1">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={toggleConversationMic}
-                        disabled={convLoading || !audioSupport.micSupported}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-xl border transition-colors whitespace-nowrap shrink-0 ${
-                          convRecording
-                            ? 'border-red-500 bg-red-50 dark:bg-red-950/50 text-red-600 dark:text-red-400'
-                            : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                        }`}
-                      >
-                        {convRecording ? <Square className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                        <span className="hidden sm:inline">{convRecording ? 'Stop & Send' : 'Speak'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setPromptBarHidden(true)}
-                        aria-label="Hide prompt bar"
-                        title="Hide prompt bar"
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
-                      >
-                        <ChevronDown className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Hide</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleConversationMic}
+                      disabled={convLoading || !audioSupport.micSupported}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-xl border transition-colors whitespace-nowrap shrink-0 ${
+                        convRecording
+                          ? 'border-red-500 bg-red-50 dark:bg-red-950/50 text-red-600 dark:text-red-400'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {convRecording ? <Square className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                      <span className="hidden sm:inline">{convRecording ? 'Stop & Send' : 'Speak'}</span>
+                    </button>
 
                     <button
                       type="submit"
@@ -3248,18 +3259,7 @@ Include exactly 3 questions with 4 options each.`;
                     className="w-full bg-transparent px-1 py-1 text-sm leading-relaxed text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none"
                   />
 
-                  <div className="flex items-center justify-between gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setPromptBarHidden(true)}
-                      aria-label="Hide prompt bar"
-                      title="Hide prompt bar"
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
-                    >
-                      <ChevronDown className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Hide</span>
-                    </button>
-
+                  <div className="flex items-center justify-end gap-2 pt-1">
                     <button
                       type="submit"
                       disabled={vocabGenerating}
@@ -3291,18 +3291,7 @@ Include exactly 3 questions with 4 options each.`;
                     className="w-full bg-transparent px-1 py-1 text-sm leading-relaxed text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none"
                   />
 
-                  <div className="flex items-center justify-between gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setPromptBarHidden(true)}
-                      aria-label="Hide prompt bar"
-                      title="Hide prompt bar"
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
-                    >
-                      <ChevronDown className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Hide</span>
-                    </button>
-
+                  <div className="flex items-center justify-end gap-2 pt-1">
                     <button
                       type="submit"
                       disabled={listeningLoading}
@@ -3453,17 +3442,6 @@ Include exactly 3 questions with 4 options each.`;
                             {quizDifficulty} · {quizCount || '4'}q
                           </span>
                         </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setPromptBarHidden(true)}
-                          aria-label="Hide prompt bar"
-                          title="Hide prompt bar"
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
-                        >
-                          <ChevronDown className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Hide</span>
-                        </button>
                       </div>
 
                       <button
@@ -3520,16 +3498,6 @@ Include exactly 3 questions with 4 options each.`;
                           </option>
                         ))}
                       </select>
-                      <button
-                        type="button"
-                        onClick={() => setPromptBarHidden(true)}
-                        aria-label="Hide prompt bar"
-                        title="Hide prompt bar"
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
-                      >
-                        <ChevronDown className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Hide</span>
-                      </button>
                     </div>
 
                     <div className="flex items-center gap-1.5">

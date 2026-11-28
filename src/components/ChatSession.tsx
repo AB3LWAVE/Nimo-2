@@ -16,9 +16,11 @@ import {
 import {
   AlertCircle,
   Check,
+  ChevronDown,
   Copy,
   History,
   ImagePlus,
+  Keyboard,
   Loader2,
   MessageSquarePlus,
   Mic,
@@ -120,6 +122,7 @@ export function ChatSession({
   // History Notice Board visibility & Gemini-inspired sliding drawer state
   const [desktopHistoryOpen, setDesktopHistoryOpen] = useState(true);
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(false);
+  const [promptBarHidden, setPromptBarHidden] = useState(false);
 
   // Chat search & message indexing
   const [searchQuery, setSearchQuery] = useState('');
@@ -1078,7 +1081,7 @@ export function ChatSession({
       </div>
 
       {/* Main Chat Workspace */}
-      <section className="flex-1 flex flex-col min-w-0 min-h-0">
+      <section className="flex-1 flex flex-col min-w-0 min-h-0 relative">
         {/* Workspace Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-2.5 bg-white dark:bg-[#161C24] border-b border-slate-200 dark:border-slate-800 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -1168,7 +1171,11 @@ export function ChatSession({
         </div>
 
         {/* Scrollable Message Thread */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 pt-6 pb-6">
+        <div
+          className={`flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 pt-6 ${
+            promptBarHidden ? 'pb-20' : 'pb-6'
+          }`}
+        >
           <div className="max-w-3xl mx-auto space-y-6">
             {displayedMessages.length === 0 ? (
               <div className="py-10 space-y-6">
@@ -1359,9 +1366,25 @@ export function ChatSession({
           </div>
         </div>
 
-        {/* Stationary ChatGPT-Style Rounded Composer */}
-        <div className="shrink-0 px-3 sm:px-6 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#F8F9FB]/95 dark:bg-[#0F1419]/95 backdrop-blur-xs">
-          <div className="max-w-3xl mx-auto">
+        {/* Stationary ChatGPT-Style Rounded Collapsible Composer */}
+        {!promptBarHidden && (
+          <div className="shrink-0 px-3 sm:px-6 pt-1.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#F8F9FB]/95 dark:bg-[#0F1419]/95 backdrop-blur-xs border-t border-slate-200/70 dark:border-slate-800/80">
+            <div className="max-w-3xl mx-auto space-y-1.5">
+              <div className="flex items-center justify-between gap-2 px-1">
+                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate">
+                  {activeConversationTitle || 'Message Nimo'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPromptBarHidden(true)}
+                  aria-label="Hide prompt bar"
+                  title="Hide prompt bar"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#161C24] text-slate-700 dark:text-slate-200 hover:border-orange-300 dark:hover:border-orange-700 hover:text-orange-600 dark:hover:text-amber-400 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span>Hide</span>
+                </button>
+              </div>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -1462,8 +1485,22 @@ export function ChatSession({
                 </div>
               </div>
             </form>
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* Stationary Small Keyboard Restore Button when Prompt Bar is Hidden */}
+        {promptBarHidden && (
+          <button
+            type="button"
+            onClick={() => setPromptBarHidden(false)}
+            aria-label="Show prompt bar"
+            title="Show prompt bar"
+            className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-30 inline-flex items-center justify-center w-9 h-9 rounded-lg bg-orange-600 hover:bg-orange-500 text-white shadow-md border border-orange-500/40 transition-transform active:scale-95"
+          >
+            <Keyboard className="w-4 h-4" />
+          </button>
+        )}
       </section>
 
       <LiveVoiceModal open={liveOpen} onClose={() => setLiveOpen(false)} mode="chat" />
