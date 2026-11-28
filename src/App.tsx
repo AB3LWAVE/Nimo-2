@@ -43,6 +43,7 @@ import { CreateSession } from './components/CreateSession';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { HybridSettingsModal } from './components/HybridSettingsModal';
 import { LearnSession } from './components/LearnSession';
+import { logAppCheckDebugReport } from './utils/appCheckDebug';
 
 const SESSIONS: Array<{ id: SessionTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
@@ -64,10 +65,15 @@ export default function App() {
   );
   const [hybridSettingsOpen, setHybridSettingsOpen] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [appCheckErrorDismissed, setAppCheckErrorDismissed] = useState(false);
 
   useEffect(() => {
     return subscribeHybridRuntimeStatus(setHybridStatus);
   }, []);
+
+  useEffect(() => {
+    logAppCheckDebugReport();
+  }, [hybridStatus.appCheckError]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -293,6 +299,19 @@ export default function App() {
               type="button"
               onClick={() => setAuthError(null)}
               className="underline ml-4"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {hybridStatus.appCheckError && !appCheckErrorDismissed && (
+          <div className="px-6 py-2.5 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between gap-4">
+            <span>{hybridStatus.appCheckError}</span>
+            <button
+              type="button"
+              onClick={() => setAppCheckErrorDismissed(true)}
+              className="underline shrink-0"
             >
               Dismiss
             </button>

@@ -91,6 +91,7 @@ const SPEEDS = [0.75, 1.0, 1.25, 1.5];
 
 function getTimestampMillis(ts: unknown): number {
   if (!ts) return 0;
+  if (typeof ts === 'number') return ts;
   if (
     typeof ts === 'object' &&
     ts !== null &&
@@ -100,6 +101,38 @@ function getTimestampMillis(ts: unknown): number {
     return (ts as { toMillis: () => number }).toMillis();
   }
   return 0;
+}
+
+function formatAttemptDate(ts: unknown): string {
+  const ms = getTimestampMillis(ts);
+  if (!ms) return '';
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function sanitizeQuestionsForStorage(questions: QuizQuestion[]): QuizQuestion[] {
+  return questions.map((q) =>
+    q.type === 'mcq'
+      ? {
+          id: q.id,
+          type: 'mcq',
+          prompt: q.prompt,
+          options: q.options || [],
+          correctIndex: typeof q.correctIndex === 'number' ? q.correctIndex : 0,
+          explanation: q.explanation,
+        }
+      : {
+          id: q.id,
+          type: 'short',
+          prompt: q.prompt,
+          sampleAnswer: q.sampleAnswer || q.explanation,
+          explanation: q.explanation,
+        }
+  );
 }
 
 interface HybridMetaTag {
@@ -216,6 +249,9 @@ export function LearnSession({
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizScore, setQuizScore] = useState<number>(0);
   const [quizAttempts, setQuizAttempts] = useState<QuizAttempt[]>([]);
+  const [guestQuizAttempts, setGuestQuizAttempts] = useState<QuizAttempt[]>([]);
+  const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
+  const [reviewFilter, setReviewFilter] = useState<'all' | 'mistakes'>('all');
   const [deepExplainMap, setDeepExplainMap] = useState<
     Record<string, { text: string; meta: HybridMetaTag }>
   >({});
@@ -839,9 +875,15 @@ Include exactly 3 questions with 4 options each.`;
     }
   };
 
-  // General Learning: Quiz Generator & Grader via Firebase AI Logic Hybrid Inference
-  const generateQuiz = async () => {
-    if ((!quizTopic.trim() && quizFiles.length === 0) || quizLoading) return;
+  const runQuizGeneration = async (
+    topicValue: string,
+    difficultyValue: ProficiencyLevel,
+    useCurrentFiles = true
+  ) => {
+    const trimmedTopic = topicValue.trim();
+    const activeFiles = useCurrentFiles ? quizFiles : [];
+    if ((!trimmedTopic && activeFiles.length === 0) || quizLoading) return;
+
     setNotesError(null);
     setQuizLoading(true);
     setQuizSubmitted(false);
@@ -849,26 +891,28 @@ Include exactly 3 questions with 4 options each.`;
     setShortAnswers({});
     setShortGrades({});
     setDeepExplainMap({});
+    setActiveAttemptId(null);
+    setReviewFilter('all');
 
     const parsedCount = Math.floor(Number(quizCount));
     const requestedCount =
       Number.isFinite(parsedCount) && parsedCount >= 1 ? parsedCount : 4;
     const topicLabel =
-      quizTopic.trim() ||
-      (quizFiles.length > 0 ? quizFiles.map((f) => f.name).join(', ') : 'Study Quiz');
+      trimmedTopic ||
+      (activeFiles.length > 0 ? activeFiles.map((f) => f.name).join(', ') : 'Study Quiz');
 
-    const textAttachments = quizFiles
+    const textAttachments = activeFiles
       .filter((f) => f.kind === 'text' && f.textContent)
       .map((f) => `--- Uploaded File: ${f.name} ---\n${f.textContent}`)
       .join('\n\n');
-    const binaryAttachment = quizFiles.find(
+    const binaryAttachment = activeFiles.find(
       (f) => f.kind === 'binary' && f.base64 && f.mimeType
     );
 
     const prompt = [
-      `Generate a ${requestedCount}-question ${quizDifficulty}-level quiz${
-        quizTopic.trim()
-          ? ` on "${quizTopic.trim()}"`
+      `Generate a ${requestedCount}-question ${difficultyValue}-level quiz${
+        trimmedTopic
+          ? ` on "${trimmedTopic}"`
           : ' based on the uploaded study material'
       } (subject: ${subject}).`,
       quizInstructions.trim()
@@ -933,6 +977,11 @@ Include exactly 3 questions with 4 options each.`;
     }
   };
 
+  // General Learning: Quiz Generator & Grader via Firebase AI Logic Hybrid Inference
+  const generateQuiz = () => {
+    void runQuizGeneration(quizTopic, quizDifficulty, true);
+  };
+
   const retrySameQuiz = () => {
     setMcqSelections({});
     setShortAnswers({});
@@ -940,6 +989,75 @@ Include exactly 3 questions with 4 options each.`;
     setQuizSubmitted(false);
     setQuizScore(0);
     setDeepExplainMap({});
+    setActiveAttemptId(null);
+    setReviewFilter('all');
+  };
+
+  const reviewQuizAttempt = (att: QuizAttempt, mistakesOnly = false) => {
+    if (!att.questions || att.questions.length === 0) {
+      setQuizTopic(att.topic);
+      setQuizDifficulty(att.difficulty);
+      void runQuizGeneration(att.topic, att.difficulty, false);
+      return;
+    }
+    setNotesError(null);
+    setQuizTitle(att.topic);
+    setQuizDifficulty(att.difficulty);
+    setQuizQuestions(att.questions);
+    setMcqSelections(att.mcqSelections || {});
+    setShortAnswers(att.shortAnswers || {});
+    setShortGrades(att.shortGrades || {});
+    setQuizScore(att.score);
+    setQuizSubmitted(true);
+    setDeepExplainMap({});
+    setQuizMeta(null);
+    setActiveAttemptId(att.id);
+    setReviewFilter(mistakesOnly ? 'mistakes' : 'all');
+  };
+
+  const retakeQuizAttempt = (att: QuizAttempt) => {
+    if (!att.questions || att.questions.length === 0) {
+      setQuizTopic(att.topic);
+      setQuizDifficulty(att.difficulty);
+      void runQuizGeneration(att.topic, att.difficulty, false);
+      return;
+    }
+    setNotesError(null);
+    setQuizTitle(att.topic);
+    setQuizDifficulty(att.difficulty);
+    setQuizQuestions(att.questions);
+    setMcqSelections({});
+    setShortAnswers({});
+    setShortGrades({});
+    setQuizScore(0);
+    setQuizSubmitted(false);
+    setDeepExplainMap({});
+    setQuizMeta(null);
+    setActiveAttemptId(null);
+    setReviewFilter('all');
+  };
+
+  const deleteQuizAttempt = async (att: QuizAttempt) => {
+    if (user) {
+      try {
+        await deleteDoc(doc(db, 'quizAttempts', att.id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `quizAttempts/${att.id}`);
+        return;
+      }
+    } else {
+      setGuestQuizAttempts((prev) => prev.filter((item) => item.id !== att.id));
+    }
+    if (activeAttemptId === att.id) {
+      setActiveAttemptId(null);
+    }
+  };
+
+  const isQuestionCorrect = (q: QuizQuestion): boolean => {
+    if (q.type === 'mcq') {
+      return mcqSelections[q.id] === q.correctIndex;
+    }
+    return Boolean(shortGrades[q.id]?.isCorrect);
   };
 
   const submitQuiz = async () => {
@@ -973,24 +1091,57 @@ Include exactly 3 questions with 4 options each.`;
       setShortGrades(updatedShortGrades);
       setQuizScore(score);
       setQuizSubmitted(true);
+      setReviewFilter('all');
+
+      const sanitizedQuestions = sanitizeQuestionsForStorage(quizQuestions);
+      const cleanMcqSelections = { ...mcqSelections };
+      const cleanShortAnswers = { ...shortAnswers };
+      const cleanShortGrades = { ...updatedShortGrades };
+      const resolvedTopic = (quizTitle || quizTopic || 'Study Quiz').slice(0, 140);
+      const summaryText = `Scored ${score}/${quizQuestions.length} on ${resolvedTopic}`.slice(
+        0,
+        4000
+      );
 
       if (user && quizQuestions.length > 0) {
         try {
-          await addDoc(collection(db, 'quizAttempts'), {
+          const payload: Record<string, unknown> = {
             ownerId: user.uid,
-            topic: (quizTitle || quizTopic).slice(0, 140),
+            topic: resolvedTopic,
             difficulty: quizDifficulty,
             score,
             totalQuestions: quizQuestions.length,
-            summaryText: `Scored ${score}/${quizQuestions.length} on ${quizTitle || quizTopic}`.slice(
-              0,
-              4000
-            ),
+            summaryText,
             createdAt: serverTimestamp(),
-          });
+          };
+          if (sanitizedQuestions.length <= 1000) {
+            payload.questions = sanitizedQuestions;
+            payload.mcqSelections = cleanMcqSelections;
+            payload.shortAnswers = cleanShortAnswers;
+            payload.shortGrades = cleanShortGrades;
+          }
+          const ref = await addDoc(collection(db, 'quizAttempts'), payload);
+          setActiveAttemptId(ref.id);
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, 'quizAttempts');
         }
+      } else if (quizQuestions.length > 0) {
+        const guestAttempt: QuizAttempt = {
+          id: `guest-quiz-${Date.now()}`,
+          ownerId: 'guest',
+          topic: resolvedTopic,
+          difficulty: quizDifficulty,
+          score,
+          totalQuestions: quizQuestions.length,
+          summaryText,
+          questions: sanitizedQuestions,
+          mcqSelections: cleanMcqSelections,
+          shortAnswers: cleanShortAnswers,
+          shortGrades: cleanShortGrades,
+          createdAt: Date.now(),
+        };
+        setGuestQuizAttempts((prev) => [guestAttempt, ...prev]);
+        setActiveAttemptId(guestAttempt.id);
       }
     } catch (err) {
       setNotesError(err instanceof Error ? err.message : 'Unable to finish quiz grading.');
@@ -1030,17 +1181,21 @@ Include exactly 3 questions with 4 options each.`;
 
   const displayedVocab = user ? savedVocab : guestVocab;
   const masteredVocabCount = displayedVocab.filter((v) => v.mastered).length;
+  const displayedQuizAttempts = user ? quizAttempts : guestQuizAttempts;
   const avgQuizPct =
-    quizAttempts.length > 0
+    displayedQuizAttempts.length > 0
       ? Math.round(
-          (quizAttempts.reduce(
+          (displayedQuizAttempts.reduce(
             (acc, a) => acc + (a.totalQuestions > 0 ? a.score / a.totalQuestions : 0),
             0
           ) /
-            quizAttempts.length) *
+            displayedQuizAttempts.length) *
             100
         )
       : 0;
+  const mistakeCount = quizSubmitted
+    ? quizQuestions.filter((q) => !isQuestionCorrect(q)).length
+    : 0;
 
   return (
     <div className="flex-1 bg-slate-50 dark:bg-slate-950">
@@ -1988,9 +2143,33 @@ Include exactly 3 questions with 4 options each.`;
                         </div>
 
                         {quizSubmitted && (
-                          <div className="flex items-center gap-3">
+                          <div className="flex flex-wrap items-center gap-2.5">
                             <div className="text-sm font-semibold font-mono tabular-nums text-sky-700 dark:text-sky-300">
                               Score: {quizScore} / {quizQuestions.length}
+                            </div>
+                            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-100 dark:bg-slate-800">
+                              <button
+                                type="button"
+                                onClick={() => setReviewFilter('all')}
+                                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                                  reviewFilter === 'all'
+                                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                                    : 'text-slate-600 dark:text-slate-300'
+                                }`}
+                              >
+                                All ({quizQuestions.length})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setReviewFilter('mistakes')}
+                                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                                  reviewFilter === 'mistakes'
+                                    ? 'bg-white dark:bg-slate-900 text-red-600 dark:text-red-400 shadow-xs'
+                                    : 'text-slate-600 dark:text-slate-300'
+                                }`}
+                              >
+                                Mistakes ({mistakeCount})
+                              </button>
                             </div>
                             <button
                               type="button"
@@ -2004,111 +2183,165 @@ Include exactly 3 questions with 4 options each.`;
                         )}
                       </div>
 
-                      <div className="space-y-6">
-                        {quizQuestions.map((q, idx) => (
-                          <div
-                            key={q.id || idx}
-                            className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3"
+                      {quizSubmitted && reviewFilter === 'mistakes' && mistakeCount === 0 ? (
+                        <div className="p-6 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/30 text-center space-y-2">
+                          <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
+                            Perfect score! You got every question right — no mistakes to review.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setReviewFilter('all')}
+                            className="text-xs font-medium text-emerald-700 dark:text-emerald-300 underline"
                           >
-                            <p className="text-sm font-medium text-slate-900 dark:text-white">
-                              {idx + 1}. {q.prompt}
-                            </p>
-
-                            {q.type === 'mcq' && q.options ? (
-                              <div className="grid sm:grid-cols-2 gap-2">
-                                {q.options.map((opt, oIdx) => {
-                                  const selected = mcqSelections[q.id] === oIdx;
-                                  const isCorrect = q.correctIndex === oIdx;
-                                  let cls =
-                                    'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800';
-                                  if (quizSubmitted) {
-                                    if (isCorrect) {
-                                      cls =
-                                        'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200';
-                                    } else if (selected && !isCorrect) {
-                                      cls =
-                                        'border-red-500 bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-200';
-                                    }
-                                  } else if (selected) {
-                                    cls =
-                                      'border-sky-600 bg-sky-50 dark:bg-sky-950/40 text-sky-800 dark:text-sky-200';
-                                  }
-                                  return (
-                                    <button
-                                      key={oIdx}
-                                      type="button"
-                                      disabled={quizSubmitted}
-                                      onClick={() =>
-                                        setMcqSelections((prev) => ({ ...prev, [q.id]: oIdx }))
-                                      }
-                                      className={`text-left px-3.5 py-2 text-sm rounded-lg border transition-colors ${cls}`}
-                                    >
-                                      {opt}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <div className="space-y-2">
-                                <textarea
-                                  rows={2}
-                                  disabled={quizSubmitted}
-                                  value={shortAnswers[q.id] || ''}
-                                  onChange={(e) =>
-                                    setShortAnswers((prev) => ({
-                                      ...prev,
-                                      [q.id]: e.target.value,
-                                    }))
-                                  }
-                                  placeholder="Write your short answer..."
-                                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                                />
-                                {quizSubmitted && shortGrades[q.id] && (
-                                  <p
-                                    className={`text-xs font-medium ${
-                                      shortGrades[q.id].isCorrect
-                                        ? 'text-emerald-600 dark:text-emerald-400'
-                                        : 'text-amber-600 dark:text-amber-400'
-                                    }`}
-                                  >
-                                    {shortGrades[q.id].isCorrect ? 'Correct' : 'Needs Review'}:{' '}
-                                    {shortGrades[q.id].feedback}
+                            Show all questions
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-6">
+                          {quizQuestions.map((q, idx) => {
+                            const correct = quizSubmitted ? isQuestionCorrect(q) : false;
+                            if (quizSubmitted && reviewFilter === 'mistakes' && correct) {
+                              return null;
+                            }
+                            const selectedIdx = mcqSelections[q.id];
+                            const hasMcqSelection = typeof selectedIdx === 'number';
+                            return (
+                              <div
+                                key={q.id || idx}
+                                className={`p-4 rounded-xl border space-y-3 ${
+                                  quizSubmitted && !correct
+                                    ? 'border-red-200 dark:border-red-900/70 bg-red-50/20 dark:bg-red-950/10'
+                                    : 'border-slate-200 dark:border-slate-800'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <p className="text-sm font-medium text-slate-900 dark:text-white">
+                                    {idx + 1}. {q.prompt}
                                   </p>
-                                )}
-                              </div>
-                            )}
-
-                            {quizSubmitted && (
-                              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
-                                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                                  {q.explanation}
-                                </p>
-                                <button
-                                  type="button"
-                                  onClick={() => explainQuestionDeeply(q)}
-                                  disabled={deepExplainLoadingId === q.id}
-                                  className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-600 dark:text-sky-400 hover:underline"
-                                >
-                                  {deepExplainLoadingId === q.id && (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  {quizSubmitted && (
+                                    <span
+                                      className={`shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
+                                        correct
+                                          ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                                          : 'bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300'
+                                      }`}
+                                    >
+                                      {correct ? (
+                                        <>
+                                          <CheckCircle2 className="w-3 h-3" />
+                                          Correct
+                                        </>
+                                      ) : q.type === 'mcq' && !hasMcqSelection ? (
+                                        'Unanswered'
+                                      ) : (
+                                        'Missed'
+                                      )}
+                                    </span>
                                   )}
-                                  Teach Step-by-Step
-                                </button>
-                                {deepExplainMap[q.id] && (
-                                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
-                                    <InferenceBadge
-                                      source={deepExplainMap[q.id].meta.inferenceSource}
-                                      modelUsed={deepExplainMap[q.id].meta.modelUsed}
-                                      latencyMs={deepExplainMap[q.id].meta.latencyMs}
+                                </div>
+
+                                {q.type === 'mcq' && q.options ? (
+                                  <div className="grid sm:grid-cols-2 gap-2">
+                                    {q.options.map((opt, oIdx) => {
+                                      const selected = mcqSelections[q.id] === oIdx;
+                                      const isCorrect = q.correctIndex === oIdx;
+                                      let cls =
+                                        'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800';
+                                      if (quizSubmitted) {
+                                        if (isCorrect) {
+                                          cls =
+                                            'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200';
+                                        } else if (selected && !isCorrect) {
+                                          cls =
+                                            'border-red-500 bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-200';
+                                        }
+                                      } else if (selected) {
+                                        cls =
+                                          'border-sky-600 bg-sky-50 dark:bg-sky-950/40 text-sky-800 dark:text-sky-200';
+                                      }
+                                      return (
+                                        <button
+                                          key={oIdx}
+                                          type="button"
+                                          disabled={quizSubmitted}
+                                          onClick={() =>
+                                            setMcqSelections((prev) => ({ ...prev, [q.id]: oIdx }))
+                                          }
+                                          className={`text-left px-3.5 py-2 text-sm rounded-lg border transition-colors ${cls}`}
+                                        >
+                                          {opt}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <textarea
+                                      rows={2}
+                                      disabled={quizSubmitted}
+                                      value={shortAnswers[q.id] || ''}
+                                      onChange={(e) =>
+                                        setShortAnswers((prev) => ({
+                                          ...prev,
+                                          [q.id]: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="Write your short answer..."
+                                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
                                     />
-                                    <MarkdownRenderer content={deepExplainMap[q.id].text} />
+                                    {quizSubmitted && shortGrades[q.id] && (
+                                      <p
+                                        className={`text-xs font-medium ${
+                                          shortGrades[q.id].isCorrect
+                                            ? 'text-emerald-600 dark:text-emerald-400'
+                                            : 'text-amber-600 dark:text-amber-400'
+                                        }`}
+                                      >
+                                        {shortGrades[q.id].isCorrect ? 'Correct' : 'Needs Review'}:{' '}
+                                        {shortGrades[q.id].feedback}
+                                      </p>
+                                    )}
+                                    {quizSubmitted && q.sampleAnswer && (
+                                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                                        Sample answer: {q.sampleAnswer}
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
+
+                                {quizSubmitted && (
+                                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                                    <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                                      {q.explanation}
+                                    </p>
+                                    <button
+                                      type="button"
+                                      onClick={() => explainQuestionDeeply(q)}
+                                      disabled={deepExplainLoadingId === q.id}
+                                      className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-600 dark:text-sky-400 hover:underline"
+                                    >
+                                      {deepExplainLoadingId === q.id && (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      )}
+                                      Teach Step-by-Step
+                                    </button>
+                                    {deepExplainMap[q.id] && (
+                                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
+                                        <InferenceBadge
+                                          source={deepExplainMap[q.id].meta.inferenceSource}
+                                          modelUsed={deepExplainMap[q.id].meta.modelUsed}
+                                          latencyMs={deepExplainMap[q.id].meta.latencyMs}
+                                        />
+                                        <MarkdownRenderer content={deepExplainMap[q.id].text} />
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
+                            );
+                          })}
+                        </div>
+                      )}
 
                       {!quizSubmitted && (
                         <div className="flex justify-end">
@@ -2132,15 +2365,15 @@ Include exactly 3 questions with 4 options each.`;
                     <h3 className="text-base font-semibold font-display text-slate-900 dark:text-white">
                       Quiz History
                     </h3>
-                    {user && quizAttempts.length > 0 && (
+                    {displayedQuizAttempts.length > 0 && (
                       <span className="text-xs font-mono tabular-nums text-sky-600 dark:text-sky-400">
-                        {avgQuizPct}% avg ({quizAttempts.length})
+                        {avgQuizPct}% avg ({displayedQuizAttempts.length})
                       </span>
                     )}
                   </div>
-                  {!user ? (
-                    <div className="space-y-2.5 text-xs text-slate-600 dark:text-slate-400">
-                      <p>Sign in with Google to save your quiz scores and review history.</p>
+                  {!user && (
+                    <div className="space-y-2.5 text-xs text-slate-600 dark:text-slate-400 pb-2 border-b border-slate-100 dark:border-slate-800">
+                      <p>Sign in with Google to save your quiz scores and review history across sessions.</p>
                       <button
                         type="button"
                         onClick={onRequireSignIn}
@@ -2149,27 +2382,106 @@ Include exactly 3 questions with 4 options each.`;
                         Sign in with Google
                       </button>
                     </div>
-                  ) : quizAttempts.length === 0 ? (
+                  )}
+
+                  {displayedQuizAttempts.length === 0 ? (
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      No completed quizzes yet. Submit a quiz to record your progress.
+                      No completed quizzes yet. Submit a quiz to review mistakes or retake it later.
                     </p>
                   ) : (
-                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {quizAttempts.map((att) => (
-                        <div key={att.id} className="py-3 flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
-                              {att.topic}
-                            </p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">
-                              {att.difficulty}
-                            </p>
+                    <div className="space-y-2.5">
+                      {displayedQuizAttempts.map((att) => {
+                        const hasSavedQuestions = Boolean(att.questions && att.questions.length > 0);
+                        const hasMistakes = att.score < att.totalQuestions;
+                        const isActive = activeAttemptId === att.id;
+                        const pct =
+                          att.totalQuestions > 0
+                            ? Math.round((att.score / att.totalQuestions) * 100)
+                            : 0;
+                        const dateLabel = formatAttemptDate(att.createdAt);
+
+                        return (
+                          <div
+                            key={att.id}
+                            className={`p-3 rounded-lg border transition-colors space-y-2.5 ${
+                              isActive
+                                ? 'border-sky-500 bg-sky-50/50 dark:bg-sky-950/20'
+                                : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50/70 dark:hover:bg-slate-800/40'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => reviewQuizAttempt(att, false)}
+                                className="min-w-0 flex-1 text-left"
+                              >
+                                <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate hover:text-sky-600 dark:hover:text-sky-400">
+                                  {att.topic}
+                                </p>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                  {att.difficulty}
+                                  {dateLabel ? ` · ${dateLabel}` : ''}
+                                </p>
+                              </button>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <span className="font-mono tabular-nums text-xs font-semibold text-sky-600 dark:text-sky-400">
+                                  {att.score}/{att.totalQuestions} ({pct}%)
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => void deleteQuizAttempt(att)}
+                                  aria-label={`Delete ${att.topic}`}
+                                  className="p-1 text-slate-400 hover:text-red-600"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {hasSavedQuestions ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => reviewQuizAttempt(att, false)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                  >
+                                    <Eye className="w-3 h-3" />
+                                    Review
+                                  </button>
+                                  {hasMistakes && (
+                                    <button
+                                      type="button"
+                                      onClick={() => reviewQuizAttempt(att, true)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-red-200 dark:border-red-900/70 bg-red-50/70 dark:bg-red-950/30 text-red-700 dark:text-red-300 hover:bg-red-100/70 dark:hover:bg-red-950/50"
+                                    >
+                                      <AlertCircle className="w-3 h-3" />
+                                      Mistakes
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => retakeQuizAttempt(att)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-sky-600 hover:bg-sky-700 text-white transition-colors"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    Retake
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => retakeQuizAttempt(att)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  New Quiz on Topic
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          <span className="font-mono tabular-nums text-sm font-semibold text-sky-600 dark:text-sky-400 shrink-0">
-                            {att.score}/{att.totalQuestions}
-                          </span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </aside>

@@ -17,6 +17,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let serverAiClient: GoogleGenAI | null = null;
+let serverAiV1BetaClient: GoogleGenAI | null = null;
 
 function hasConfiguredServerGeminiKey(): boolean {
   const key = (process.env.GEMINI_API_KEY || '').trim();
@@ -42,7 +43,45 @@ function getServerAi(): GoogleGenAI {
   return serverAiClient;
 }
 
+function getServerAiV1Beta(): GoogleGenAI {
+  if (!hasConfiguredServerGeminiKey()) {
+    throw new Error(
+      'GEMINI_API_KEY is not configured on the server. Set GEMINI_API_KEY in AI Studio Secrets or .env to use server-side Audio TTS, Speech-to-Text, and Live Voice.'
+    );
+  }
+  if (!serverAiV1BetaClient) {
+    serverAiV1BetaClient = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      apiVersion: 'v1beta',
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  }
+  return serverAiV1BetaClient;
+}
+
 const PAID_MODELS = new Set(['gemini-4-carbon', 'gemini-4-neon']);
+
+function extractReadableGeminiMessage(rawMessage: string): string {
+  const trimmed = rawMessage.trim();
+  const jsonStart = trimmed.indexOf('{');
+  if (jsonStart !== -1) {
+    try {
+      const parsed = JSON.parse(trimmed.slice(jsonStart)) as {
+        error?: { message?: string };
+      };
+      if (parsed?.error?.message) {
+        return parsed.error.message.split('\n')[0].trim();
+      }
+    } catch {
+      // Fall back to rawMessage
+    }
+  }
+  return trimmed;
+}
 
 function formatGeminiError(err: unknown, model: string) {
   const rawMessage = err instanceof Error ? err.message : String(err);
@@ -57,37 +96,119 @@ function formatGeminiError(err: unknown, model: string) {
       lower.includes('quota'));
 
   let status = 500;
-  if (lower.includes('api_key_invalid') || lower.includes('invalid api key')) {
+  if (lower.includes('api_key_invalid') || lower.includes('invalid api key') || lower.includes('api key not valid')) {
+    status = 400;
+  } else if (lower.includes('invalid_argument') || lower.includes('invalid json payload')) {
     status = 400;
   } else if (lower.includes('permission_denied') || lower.includes('403')) {
     status = 403;
   } else if (lower.includes('not_found') || lower.includes('404')) {
     status = 404;
-  } else if (lower.includes('resource_exhausted') || lower.includes('429')) {
+  } else if (lower.includes('resource_exhausted') || lower.includes('429') || lower.includes('quota')) {
     status = 429;
+  } else if (lower.includes('unavailable') || lower.includes('503') || lower.includes('high demand')) {
+    status = 503;
   }
 
-  let message = rawMessage;
+  let message = extractReadableGeminiMessage(rawMessage);
   if (isBillingRequired) {
-    message = `Model "${model}" requires a billing-enabled Gemini API key in Settings > Secrets. Switch to Balanced (gemini-4-hydrogen) or Fast (gemini-3.1-flash-lite) mode, or attach a paid API key.`;
-  } else if (status === 400 || lower.includes('api key')) {
+    message = `Model "${model}" requires a billing-enabled Gemini API key in Settings > Secrets. Switch to Balanced or Fast mode, or attach a paid API key.`;
+  } else if (
+    lower.includes('api_key_invalid') ||
+    lower.includes('invalid api key') ||
+    lower.includes('api key not valid') ||
+    lower.includes('gemini_api_key is not configured')
+  ) {
     message = 'Gemini API key is missing or invalid. Check Settings > Secrets.';
+  } else if (status === 429) {
+    message = `Gemini API quota or rate limit reached (${model}). Wait a moment and retry, or check your Gemini API key plan/billing in Settings > Secrets.`;
+  } else if (status === 503) {
+    message = 'The Gemini model is temporarily experiencing high demand. Please retry in a moment.';
   }
 
   return { status, message, model, isBillingRequired };
 }
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 1): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message.toLowerCase() : '';
-    if (retries > 0 && (msg.includes('503') || msg.includes('unavailable') || msg.includes('timeout'))) {
-      await new Promise((r) => setTimeout(r, 600));
-      return withRetry(fn, retries - 1);
+function isRetryableUpstreamError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes('503') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('timeout') ||
+    msg.includes('timed out') ||
+    msg.includes('overloaded') ||
+    msg.includes('econnreset')
+  );
+}
+
+function isFallbackCandidateError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    isRetryableUpstreamError(err) ||
+    msg.includes('not_found') ||
+    msg.includes('404') ||
+    msg.includes('429') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota')
+  );
+}
+
+async function withRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+  const backoffMs = [500, 1000];
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt < retries && isRetryableUpstreamError(err)) {
+        const delayMs = backoffMs[attempt] ?? 1000;
+        attempt += 1;
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      throw err;
     }
-    throw err;
   }
+}
+
+async function generateWithStandardFallback(
+  models: string[],
+  buildRequest: (model: string) => {
+    contents: unknown;
+    config?: Record<string, unknown>;
+  }
+) {
+  let lastErr: unknown = null;
+  let lastModel = models[0];
+
+  for (const model of models) {
+    lastModel = model;
+    const req = buildRequest(model);
+    try {
+      const response = await withRetry(() =>
+        getServerAi().models.generateContent({
+          model,
+          contents: req.contents as Parameters<GoogleGenAI['models']['generateContent']>[0]['contents'],
+          config: req.config as Parameters<GoogleGenAI['models']['generateContent']>[0]['config'],
+        })
+      );
+      return { response, modelUsed: model };
+    } catch (err) {
+      lastErr = err;
+      if (isFallbackCandidateError(err)) {
+        continue;
+      }
+      throw Object.assign(err instanceof Error ? err : new Error(String(err)), {
+        _failedModel: model,
+      });
+    }
+  }
+
+  throw Object.assign(
+    lastErr instanceof Error ? lastErr : new Error(String(lastErr)),
+    { _failedModel: lastModel }
+  );
 }
 
 async function startServer() {
@@ -171,6 +292,27 @@ async function startServer() {
         modelUsed: model,
       });
     } catch (err) {
+      if (model === 'gemini-4-hydrogen' && isFallbackCandidateError(err)) {
+        try {
+          const fallbackModel = 'gemini-3.1-flash-lite';
+          const fallbackResponse = await withRetry(() =>
+            getServerAi().models.generateContent({
+              model: fallbackModel,
+              contents,
+              config: { systemInstruction },
+            })
+          );
+          res.json({
+            text: fallbackResponse.text ?? '',
+            modelUsed: fallbackModel,
+          });
+          return;
+        } catch (fallbackErr) {
+          const formatted = formatGeminiError(fallbackErr, 'gemini-3.1-flash-lite');
+          res.status(formatted.status).json(formatted);
+          return;
+        }
+      }
       const formatted = formatGeminiError(err, model);
       res.status(formatted.status).json(formatted);
     }
@@ -217,22 +359,28 @@ async function startServer() {
       },
     ];
 
-    const config: Record<string, unknown> = {
-      ...(systemInstruction ? { systemInstruction } : {}),
-      ...(typeof temperature === 'number' ? { temperature } : {}),
-      ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
-    };
-
     const candidateModels = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'];
     let lastErr: unknown = null;
+    let lastModel = candidateModels[0];
+    let first503Err: unknown = null;
 
     for (const model of candidateModels) {
+      lastModel = model;
+      // Gemini 4 models disallow deprecated sampling parameters such as temperature.
+      const modelConfig: Record<string, unknown> = {
+        ...(systemInstruction ? { systemInstruction } : {}),
+        ...(!model.startsWith('gemini-4-') && typeof temperature === 'number'
+          ? { temperature }
+          : {}),
+        ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+      };
+
       try {
         const response = await withRetry(() =>
           getServerAi().models.generateContent({
             model,
             contents,
-            config,
+            config: modelConfig,
           })
         );
         res.json({
@@ -242,8 +390,10 @@ async function startServer() {
         return;
       } catch (err) {
         lastErr = err;
-        const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-        if (msg.includes('503') || msg.includes('unavailable') || msg.includes('not_found')) {
+        if (!first503Err && isRetryableUpstreamError(err)) {
+          first503Err = err;
+        }
+        if (isFallbackCandidateError(err)) {
           continue;
         }
         const formatted = formatGeminiError(err, model);
@@ -252,11 +402,13 @@ async function startServer() {
       }
     }
 
-    const formatted = formatGeminiError(lastErr, candidateModels[0]);
+    const chosenErr = first503Err || lastErr;
+    const chosenModel = first503Err ? 'gemini-3.1-flash-lite' : lastModel;
+    const formatted = formatGeminiError(chosenErr, chosenModel);
     res.status(formatted.status).json(formatted);
   });
 
-  // 2. Audio Transcription (gemini-3.5-transcribe)
+  // 2. Audio Transcription (gemini-3.5-transcribe via v1beta)
   app.post('/api/audio/transcribe', async (req, res) => {
     const { audioBase64, mimeType = 'audio/webm', languageHint } = req.body as {
       audioBase64: string;
@@ -269,35 +421,50 @@ async function startServer() {
       return;
     }
 
-    const model = 'gemini-3.5-transcribe';
-    try {
-      const promptText = languageHint
-        ? `Transcribe the spoken audio faithfully. Expected language: ${languageHint}. Return only the spoken transcript without extra commentary.`
-        : 'Transcribe the spoken audio faithfully. Return only the spoken transcript without extra commentary.';
+    const candidateModels = ['gemini-3.5-transcribe', 'gemini-3.1-flash-lite'];
+    const promptText = languageHint
+      ? `Transcribe the spoken audio faithfully. Expected language: ${languageHint}. Return only the spoken transcript without extra commentary.`
+      : 'Transcribe the spoken audio faithfully. Return only the spoken transcript without extra commentary.';
 
-      const response = await withRetry(() =>
-        getServerAi().models.generateContent({
-          model,
-          contents: {
-            parts: [
-              { inlineData: { mimeType, data: audioBase64 } },
-              { text: promptText },
-            ],
-          },
-        })
-      );
+    let lastErr: unknown = null;
+    let lastModel = candidateModels[0];
+    for (const model of candidateModels) {
+      lastModel = model;
+      try {
+        const client = model === 'gemini-3.5-transcribe' ? getServerAiV1Beta() : getServerAi();
+        const response = await withRetry(() =>
+          client.models.generateContent({
+            model,
+            contents: {
+              parts: [
+                { inlineData: { mimeType, data: audioBase64 } },
+                { text: promptText },
+              ],
+            },
+          })
+        );
 
-      res.json({
-        transcript: (response.text ?? '').trim(),
-        modelUsed: model,
-      });
-    } catch (err) {
-      const formatted = formatGeminiError(err, model);
-      res.status(formatted.status).json(formatted);
+        res.json({
+          transcript: (response.text ?? '').trim(),
+          modelUsed: model,
+        });
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (isFallbackCandidateError(err)) {
+          continue;
+        }
+        const formatted = formatGeminiError(err, model);
+        res.status(formatted.status).json(formatted);
+        return;
+      }
     }
+
+    const formatted = formatGeminiError(lastErr, lastModel);
+    res.status(formatted.status).json(formatted);
   });
 
-  // 3. Text-to-Speech (gemini-3.8-flash-tts)
+  // 3. Text-to-Speech (gemini-3.8-flash-lite-tts / gemini-3.8-flash-tts via v1beta)
   app.post('/api/audio/tts', async (req, res) => {
     const {
       text,
@@ -316,54 +483,69 @@ async function startServer() {
       return;
     }
 
-    const model = 'gemini-3.8-flash-tts';
+    const ttsModels = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
     const cleanText = text.replace(/```[\s\S]*?```/g, 'code snippet').slice(0, 2500);
     const speechStyle =
       style || `Clear, natural native ${language} tutor speaking at an articulate, steady pace`;
 
-    try {
-      const response = await withRetry(() =>
-        getServerAi().models.generateContent({
-          model,
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  text: cleanText,
-                  speechMetadata: {
-                    style: speechStyle,
+    let lastErr: unknown = null;
+    let lastModel = ttsModels[0];
+
+    for (const model of ttsModels) {
+      lastModel = model;
+      try {
+        const response = await withRetry(() =>
+          getServerAiV1Beta().models.generateContent({
+            model,
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text: cleanText,
+                    speechMetadata: {
+                      style: speechStyle,
+                    },
                   },
+                ],
+              },
+            ],
+            config: {
+              responseModalities: ['AUDIO'],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName },
                 },
-              ],
-            },
-          ],
-          config: {
-            responseModalities: ['AUDIO'],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName },
               },
             },
-          },
-        })
-      );
+          })
+        );
 
-      const audioBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (!audioBase64) {
-        res.status(502).json({ error: 'Speech service returned no audio data.', model });
+        const audioBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (!audioBase64) {
+          res.status(502).json({ error: 'Speech service returned no audio data.', model });
+          return;
+        }
+
+        res.json({
+          audioBase64,
+          mimeType: 'audio/wav',
+          modelUsed: model,
+        });
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (isFallbackCandidateError(err)) {
+          continue;
+        }
+        const formatted = formatGeminiError(err, model);
+        res.status(formatted.status).json(formatted);
         return;
       }
-
-      res.json({
-        audioBase64,
-        mimeType: 'audio/wav',
-        modelUsed: model,
-      });
-    } catch (err) {
-      const formatted = formatGeminiError(err, model);
-      res.status(formatted.status).json(formatted);
     }
+
+    const formatted = formatGeminiError(lastErr, lastModel);
+    res.status(formatted.status).json(formatted);
   });
 
   // 4. Language Learning Actions
@@ -396,10 +578,9 @@ async function startServer() {
 
     try {
       if (action === 'vocab') {
-        const model = 'gemini-4-hydrogen';
-        const response = await withRetry(() =>
-          getServerAi().models.generateContent({
-            model,
+        const { response, modelUsed } = await generateWithStandardFallback(
+          ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+          () => ({
             contents: `Create 6 practical ${level}-level ${targetLanguage} vocabulary lessons on the topic "${topic}". Include accurate translations, learner-friendly phonetic pronunciation guides, and a natural contextual example sentence with its English translation.`,
             config: {
               systemInstruction: 'You are Nimo, an expert multilingual language tutor.',
@@ -421,15 +602,14 @@ async function startServer() {
             },
           })
         );
-        res.json({ items: JSON.parse(response.text || '[]'), modelUsed: model });
+        res.json({ items: JSON.parse(response.text || '[]'), modelUsed });
         return;
       }
 
       if (action === 'listening') {
-        const model = 'gemini-4-hydrogen';
-        const response = await withRetry(() =>
-          getServerAi().models.generateContent({
-            model,
+        const { response, modelUsed } = await generateWithStandardFallback(
+          ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+          () => ({
             contents: `Generate a ${level}-level ${targetLanguage} listening comprehension exercise about "${topic}". Provide a short spoken passage (4 to 6 natural sentences in ${targetLanguage}) and 3 multiple-choice comprehension questions in English testing details from the passage, each with 4 options and an explanation.`,
             config: {
               systemInstruction: 'You are Nimo, a language curriculum designer.',
@@ -458,20 +638,19 @@ async function startServer() {
             },
           })
         );
-        res.json({ exercise: JSON.parse(response.text || '{}'), modelUsed: model });
+        res.json({ exercise: JSON.parse(response.text || '{}'), modelUsed });
         return;
       }
 
       if (action === 'conversation') {
-        const model = 'gemini-4-hydrogen';
         const recentHistory = history
           .slice(-8)
           .map((m) => `${m.role === 'user' ? 'Learner' : 'Nimo'}: ${m.content}`)
           .join('\n');
 
-        const response = await withRetry(() =>
-          getServerAi().models.generateContent({
-            model,
+        const { response, modelUsed } = await generateWithStandardFallback(
+          ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+          () => ({
             contents: `Target language: ${targetLanguage}\nLearner level: ${level}\nConversation so far:\n${recentHistory || '(New conversation)'}\n\nLearner's latest message: "${userMessage}"\n\nRespond naturally in ${targetLanguage} appropriate for ${level} level, provide an English translation, give a gentle grammar or phrasing tip if helpful (empty string if spotless), and ask one engaging follow-up question in ${targetLanguage}.`,
             config: {
               systemInstruction: 'You are Nimo, a supportive conversational language tutor.',
@@ -494,12 +673,14 @@ async function startServer() {
             },
           })
         );
-        res.json({ ...JSON.parse(response.text || '{}'), modelUsed: model });
+        res.json({ ...JSON.parse(response.text || '{}'), modelUsed });
         return;
       }
 
       if (action === 'pronunciation') {
-        const model = fallbackToStandard ? 'gemini-4-hydrogen' : 'gemini-4-neon';
+        const candidateModels = fallbackToStandard
+          ? ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']
+          : ['gemini-4-neon'];
         const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
         if (audioBase64) {
           parts.push({ inlineData: { mimeType: audioMimeType, data: audioBase64 } });
@@ -508,42 +689,55 @@ async function startServer() {
           text: `Evaluate the learner's ${level}-level ${targetLanguage} spoken attempt.\nTarget phrase: "${targetPhrase}"\nTranscribed speech: "${spokenTranscript}"\nProvide: (1) transcriptObserved, (2) accuracyScore from 0 to 100, (3) clear pronunciationFeedback, (4) phoneticGuide for the target phrase, (5) specific corrections array (stress, vowels, consonants, pacing), and (6) an actionable practiceTip.`,
         });
 
-        try {
-          const response = await withRetry(() =>
-            getServerAi().models.generateContent({
-              model,
-              contents: { parts },
-              config: {
-                systemInstruction:
-                  'You are Nimo, an encouraging phonetics and pronunciation coach. Be specific and honest about what was heard versus the target phrase.',
-                responseMimeType: 'application/json',
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    transcriptObserved: { type: Type.STRING },
-                    accuracyScore: { type: Type.INTEGER },
-                    pronunciationFeedback: { type: Type.STRING },
-                    phoneticGuide: { type: Type.STRING },
-                    corrections: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    practiceTip: { type: Type.STRING },
+        let lastErr: unknown = null;
+        let lastModel = candidateModels[0];
+        for (const model of candidateModels) {
+          lastModel = model;
+          try {
+            const response = await withRetry(() =>
+              getServerAi().models.generateContent({
+                model,
+                contents: { parts },
+                config: {
+                  systemInstruction:
+                    'You are Nimo, an encouraging phonetics and pronunciation coach. Be specific and honest about what was heard versus the target phrase.',
+                  responseMimeType: 'application/json',
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                      transcriptObserved: { type: Type.STRING },
+                      accuracyScore: { type: Type.INTEGER },
+                      pronunciationFeedback: { type: Type.STRING },
+                      phoneticGuide: { type: Type.STRING },
+                      corrections: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      practiceTip: { type: Type.STRING },
+                    },
+                    required: [
+                      'transcriptObserved',
+                      'accuracyScore',
+                      'pronunciationFeedback',
+                      'phoneticGuide',
+                      'corrections',
+                      'practiceTip',
+                    ],
                   },
-                  required: [
-                    'transcriptObserved',
-                    'accuracyScore',
-                    'pronunciationFeedback',
-                    'phoneticGuide',
-                    'corrections',
-                    'practiceTip',
-                  ],
                 },
-              },
-            })
-          );
-          res.json({ ...JSON.parse(response.text || '{}'), modelUsed: model });
-        } catch (err) {
-          const formatted = formatGeminiError(err, model);
-          res.status(formatted.status).json(formatted);
+              })
+            );
+            res.json({ ...JSON.parse(response.text || '{}'), modelUsed: model });
+            return;
+          } catch (err) {
+            lastErr = err;
+            if (candidateModels.length > 1 && isFallbackCandidateError(err)) {
+              continue;
+            }
+            const formatted = formatGeminiError(err, model);
+            res.status(formatted.status).json(formatted);
+            return;
+          }
         }
+        const formatted = formatGeminiError(lastErr, lastModel);
+        res.status(formatted.status).json(formatted);
         return;
       }
 
@@ -581,64 +775,66 @@ async function startServer() {
     };
 
     if (action === 'study_notes') {
-      const model = deepMode && !fallbackToStandard ? 'gemini-4-carbon' : 'gemini-4-hydrogen';
-      const config: Record<string, unknown> = {
-        systemInstruction:
-          'You are Nimo, a master academic tutor. Produce crisp, well-organized study notes using markdown headings, bulleted key concepts, worked examples, and a concise summary.',
-      };
-      if (model === 'gemini-4-carbon') {
-        config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
-      }
-
+      const models =
+        deepMode && !fallbackToStandard
+          ? ['gemini-4-carbon']
+          : ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
       try {
-        const response = await withRetry(() =>
-          getServerAi().models.generateContent({
-            model,
+        const { response, modelUsed } = await generateWithStandardFallback(models, (m) => {
+          const config: Record<string, unknown> = {
+            systemInstruction:
+              'You are Nimo, a master academic tutor. Produce crisp, well-organized study notes using markdown headings, bulleted key concepts, worked examples, and a concise summary.',
+          };
+          if (m === 'gemini-4-carbon') {
+            config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+          }
+          return {
             contents: `Create comprehensive ${difficulty}-level study notes and a structured summary for:\nSubject: ${subject}\nTopic: ${topic}`,
             config,
-          })
-        );
-        res.json({ title: `${subject}: ${topic}`, summaryMarkdown: response.text ?? '', modelUsed: model });
+          };
+        });
+        res.json({ title: `${subject}: ${topic}`, summaryMarkdown: response.text ?? '', modelUsed });
       } catch (err) {
-        const formatted = formatGeminiError(err, model);
+        const failedModel = (err as { _failedModel?: string })?._failedModel || models[0];
+        const formatted = formatGeminiError(err, failedModel);
         res.status(formatted.status).json(formatted);
       }
       return;
     }
 
     if (action === 'explain_step_by_step') {
-      const model = fallbackToStandard ? 'gemini-4-hydrogen' : 'gemini-4-carbon';
-      const config: Record<string, unknown> = {
-        systemInstruction:
-          'You are Nimo, a patient step-by-step teacher. Break down complex problems into numbered logical steps, checking intuition and edge cases.',
-      };
-      if (model === 'gemini-4-carbon') {
-        config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
-      }
-
+      const models = fallbackToStandard
+        ? ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']
+        : ['gemini-4-carbon'];
       try {
-        const response = await withRetry(() =>
-          getServerAi().models.generateContent({
-            model,
+        const { response, modelUsed } = await generateWithStandardFallback(models, (m) => {
+          const config: Record<string, unknown> = {
+            systemInstruction:
+              'You are Nimo, a patient step-by-step teacher. Break down complex problems into numbered logical steps, checking intuition and edge cases.',
+          };
+          if (m === 'gemini-4-carbon') {
+            config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+          }
+          return {
             contents: `Teach me step by step (${difficulty} level, subject: ${subject}):\n${topic}`,
             config,
-          })
-        );
-        res.json({ explanation: response.text ?? '', modelUsed: model });
+          };
+        });
+        res.json({ explanation: response.text ?? '', modelUsed });
       } catch (err) {
-        const formatted = formatGeminiError(err, model);
+        const failedModel = (err as { _failedModel?: string })?._failedModel || models[0];
+        const formatted = formatGeminiError(err, failedModel);
         res.status(formatted.status).json(formatted);
       }
       return;
     }
 
     if (action === 'generate_quiz') {
-      const model = 'gemini-4-hydrogen';
       const safeCount = Math.min(Math.max(Number(questionCount) || 5, 2), 10);
       try {
-        const response = await withRetry(() =>
-          getServerAi().models.generateContent({
-            model,
+        const { response, modelUsed } = await generateWithStandardFallback(
+          ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+          () => ({
             contents: `Generate a ${safeCount}-question ${difficulty}-level quiz on "${topic}" (subject: ${subject}). Mix multiple-choice ("mcq", 4 options) and 1-2 short-answer ("short") practice questions. Provide clear step-by-step explanations for each question.`,
             config: {
               systemInstruction: 'You are Nimo, an educational assessment designer.',
@@ -669,9 +865,10 @@ async function startServer() {
             },
           })
         );
-        res.json({ ...JSON.parse(response.text || '{}'), modelUsed: model });
+        res.json({ ...JSON.parse(response.text || '{}'), modelUsed });
       } catch (err) {
-        const formatted = formatGeminiError(err, model);
+        const failedModel = (err as { _failedModel?: string })?._failedModel || 'gemini-4-hydrogen';
+        const formatted = formatGeminiError(err, failedModel);
         res.status(formatted.status).json(formatted);
       }
       return;
@@ -729,14 +926,14 @@ async function startServer() {
       fallbackToStandard?: boolean;
     };
 
-    let model = 'gemini-4-hydrogen';
+    let candidateModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     if (!fallbackToStandard) {
       if (image || action === 'image_to_code') {
-        model = 'gemini-4-neon';
+        candidateModels = ['gemini-4-neon'];
       } else if (action === 'debug_deep') {
-        model = 'gemini-4-carbon';
+        candidateModels = ['gemini-4-carbon'];
       } else if (action === 'quick_fix') {
-        model = 'gemini-3.1-flash-lite';
+        candidateModels = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'];
       }
     }
 
@@ -754,21 +951,18 @@ async function startServer() {
       runtimeOutput ? `Latest Output / Error:\n${runtimeOutput}\n\n` : ''
     }Code:\n\`\`\`${language}\n${code}\n\`\`\``;
 
-    const config: Record<string, unknown> = {
-      systemInstruction:
-        'You are Nimo, a senior staff software engineer and coding mentor. Be precise, practical, and highlight exact fixes with clean code blocks.',
-    };
-
-    if (model === 'gemini-4-carbon') {
-      config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
-    } else if (model === 'gemini-3.1-flash-lite') {
-      config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
-    }
-
     try {
-      const response = await withRetry(() =>
-        getServerAi().models.generateContent({
-          model,
+      const { response, modelUsed } = await generateWithStandardFallback(candidateModels, (m) => {
+        const config: Record<string, unknown> = {
+          systemInstruction:
+            'You are Nimo, a senior staff software engineer and coding mentor. Be precise, practical, and highlight exact fixes with clean code blocks.',
+        };
+        if (m === 'gemini-4-carbon') {
+          config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+        } else if (m === 'gemini-3.1-flash-lite') {
+          config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
+        }
+        return {
           contents: {
             parts: [
               ...(image ? [{ inlineData: { mimeType: image.mimeType, data: image.data } }] : []),
@@ -776,20 +970,21 @@ async function startServer() {
             ],
           },
           config,
-        })
-      );
+        };
+      });
 
       res.json({
         reply: response.text ?? '',
-        modelUsed: model,
+        modelUsed,
       });
     } catch (err) {
-      const formatted = formatGeminiError(err, model);
+      const failedModel = (err as { _failedModel?: string })?._failedModel || candidateModels[0];
+      const formatted = formatGeminiError(err, failedModel);
       res.status(formatted.status).json(formatted);
     }
   });
 
-  // HTTP server + WebSocket bridge for Gemini Live API (gemini-3.8-live)
+  // HTTP server + WebSocket bridge for Gemini Live API (gemini-3.8-live via v1beta)
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws/live' });
 
@@ -807,7 +1002,7 @@ async function startServer() {
     let liveSession: Awaited<ReturnType<GoogleGenAI['live']['connect']>> | null = null;
 
     try {
-      liveSession = await getServerAi().live.connect({
+      liveSession = await getServerAiV1Beta().live.connect({
         model: 'gemini-3.8-live',
         config: {
           responseModalities: [Modality.AUDIO],
@@ -847,15 +1042,20 @@ async function startServer() {
           },
           onerror: (err: unknown) => {
             if (clientWs.readyState === WebSocket.OPEN) {
-              clientWs.send(
-                JSON.stringify({
-                  error: err instanceof Error ? err.message : 'Live session error occurred.',
-                })
-              );
+              const errObj = err as { message?: string; error?: { message?: string } } | null;
+              const detail =
+                err instanceof Error
+                  ? err.message
+                  : errObj?.message || errObj?.error?.message || 'Live session error occurred.';
+              clientWs.send(JSON.stringify({ error: detail }));
             }
           },
-          onclose: () => {
+          onclose: (event: unknown) => {
+            const ev = event as { code?: number; reason?: string } | null;
             if (clientWs.readyState === WebSocket.OPEN) {
+              if (ev?.reason) {
+                clientWs.send(JSON.stringify({ error: ev.reason }));
+              }
               clientWs.close();
             }
           },

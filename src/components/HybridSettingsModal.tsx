@@ -167,6 +167,11 @@ export function HybridSettingsModal({
               <p className="text-xs font-medium text-slate-900 dark:text-white">
                 {appCheckLabel[status.appCheckStatus]}
               </p>
+              {status.appCheckError && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300 leading-snug pt-1">
+                  {status.appCheckError}
+                </p>
+              )}
             </div>
 
             <div className="sm:col-span-2 p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-wrap items-center justify-between gap-2">

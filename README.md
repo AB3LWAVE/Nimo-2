@@ -99,4 +99,10 @@ Nimo preserves a strict three-section primary navigation bar:
 - Hardened Firestore rules (`firestore.rules`) enforce owner isolation (`ownerId == request.auth.uid`), email verification on writes, immutable `createdAt`, strict field allowlisting, and bounded payload sizes.
 - Users can inspect runtime routing (On-device vs Cloud) on every message and delete all Firestore records and their Firebase Auth account from the **Privacy & Data Controls** modal (shield icon in the top bar).
 
-Licensed under [Apache License 2.0](./LICENSE).
+---
+
+## License
+
+**NIMO AI** is distributed under the **Apache License 2.0**. See the root [`LICENSE`](./LICENSE) file for the full license text and terms.
+
+Copyright 2026 [My Full Name]

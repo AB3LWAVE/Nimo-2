@@ -38,6 +38,7 @@ export interface HybridRuntimeStatus {
   isDownloading: boolean;
   deviceModelReady: boolean;
   appCheckStatus: AppCheckStatus;
+  appCheckError?: string | null;
   cloudModel: string;
   lastInferenceSource: SdkInferenceSource | null;
   lastModelUsed: string | null;
@@ -167,6 +168,10 @@ export interface QuizAttempt {
   score: number;
   totalQuestions: number;
   summaryText: string;
+  questions?: QuizQuestion[];
+  mcqSelections?: Record<string, number>;
+  shortAnswers?: Record<string, string>;
+  shortGrades?: Record<string, ShortAnswerGrade>;
   createdAt?: unknown;
 }
 

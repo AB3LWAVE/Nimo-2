@@ -7,7 +7,7 @@ import {
   type Content,
   type Part,
 } from 'firebase/ai';
-import { ai, appCheckStatus } from '../firebase';
+import { ai, appCheckStatus, getAppCheckError, subscribeAppCheckError } from '../firebase';
 import type {
   HybridGenerationResult,
   HybridInferenceSource,
@@ -110,14 +110,37 @@ export function mapAiError(
   }
 
   if (
+    lower.includes('exchangedebugtoken') ||
+    lower.includes('fetch-status-error') ||
+    lower.includes('initial-throttle') ||
     lower.includes('app check') ||
     lower.includes('appcheck') ||
     lower.includes('401') ||
     lower.includes('403')
   ) {
+    const capturedAppCheckErr = getAppCheckError();
+    if (capturedAppCheckErr) {
+      return {
+        message: capturedAppCheckErr,
+        retryable: false,
+        code: 'app_check_or_403',
+      };
+    }
+    const errCode =
+      err && typeof err === 'object' && typeof (err as { code?: unknown }).code === 'string'
+        ? (err as { code: string }).code
+        : '';
+    const detail = [errCode ? `code: ${errCode}` : '', raw ? `message: ${raw}` : '']
+      .filter(Boolean)
+      .join(' | ');
+    const isDebugExchange =
+      lower.includes('exchangedebugtoken') ||
+      lower.includes('fetch-status-error') ||
+      lower.includes('initial-throttle');
     return {
-      message:
-        'Request blocked by Firebase App Check or project permissions (401/403). Configure VITE_RECAPTCHA_SITE_KEY or register your local App Check debug token in Firebase Console.',
+      message: isDebugExchange
+        ? `Firebase App Check :exchangeDebugToken returned 403 (${detail}). Check Google Cloud API key restrictions, Firebase App Check API permissions, and Manage debug tokens for web app 1:347676576464:web:96a145247bc2fdbab0acd5.`
+        : `Request blocked by Firebase App Check or project permissions (${detail}). Configure VITE_RECAPTCHA_SITE_KEY or register your local App Check debug token under Manage debug tokens for web app 1:347676576464:web:96a145247bc2fdbab0acd5 in Firebase Console (and check Google Cloud API key / Firebase App Check API permissions).`,
       retryable: false,
       code: 'app_check_or_403',
     };
@@ -166,7 +189,14 @@ export function shouldUseServerHybridFallback(
     lower.includes('has not been used in project') ||
     lower.includes('app check') ||
     lower.includes('appcheck') ||
+    lower.includes('exchangedebugtoken') ||
+    lower.includes('fetch-status-error') ||
+    lower.includes('initial-throttle') ||
+    lower.includes('throttled') ||
+    lower.includes('unauthenticated') ||
     lower.includes('permission_denied') ||
+    lower.includes('not_found') ||
+    lower.includes('not found') ||
     lower.includes('401') ||
     lower.includes('403') ||
     lower.includes('404')
@@ -181,6 +211,7 @@ let runtimeStatus: HybridRuntimeStatus = {
   isDownloading: false,
   deviceModelReady: false,
   appCheckStatus,
+  appCheckError: getAppCheckError(),
   cloudModel: DEFAULT_CLOUD_MODEL,
   lastInferenceSource: null,
   lastModelUsed: null,
@@ -262,6 +293,10 @@ if (typeof window !== 'undefined') {
   });
   window.addEventListener('offline', () => {
     runtimeStatus = { ...runtimeStatus, online: false };
+    notifyListeners();
+  });
+  subscribeAppCheckError((appCheckError) => {
+    runtimeStatus = { ...runtimeStatus, appCheckError };
     notifyListeners();
   });
   void refreshHybridCapabilities();
@@ -492,6 +527,7 @@ export async function generateHybridText(
       typeof window !== 'undefined' &&
       shouldUseServerHybridFallback(err, mode, online)
     ) {
+      let fallbackErrorMessage: string | null = null;
       try {
         const res = await fetch('/api/hybrid/fallback', {
           method: 'POST',
@@ -532,8 +568,17 @@ export async function generateHybridText(
             modeUsed: mode,
           };
         }
-      } catch {
-        // Fall through to mapped Firebase AI error below
+        if (payload.message || payload.error) {
+          fallbackErrorMessage = payload.message || payload.error || null;
+        }
+      } catch (fallbackErr) {
+        if (fallbackErr instanceof Error && fallbackErr.name === 'AbortError') {
+          throw new Error('Inference request timed out. Please try again.');
+        }
+      }
+
+      if (fallbackErrorMessage) {
+        throw new Error(fallbackErrorMessage);
       }
     }
 

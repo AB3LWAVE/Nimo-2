@@ -108,7 +108,7 @@ service cloud.firestore {
 
     function isValidQuizAttempt(data) {
       return data.keys().hasAll(['ownerId', 'topic', 'difficulty', 'score', 'totalQuestions', 'summaryText', 'createdAt'])
-        && data.keys().hasOnly(['ownerId', 'topic', 'difficulty', 'score', 'totalQuestions', 'summaryText', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'topic', 'difficulty', 'score', 'totalQuestions', 'summaryText', 'questions', 'mcqSelections', 'shortAnswers', 'shortGrades', 'createdAt'])
         && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
         && data.topic is string && data.topic.size() >= 1 && data.topic.size() <= 140
         && data.difficulty is string && data.difficulty in ['Beginner', 'Intermediate', 'Advanced']
@@ -116,6 +116,10 @@ service cloud.firestore {
         && data.totalQuestions is int && data.totalQuestions >= 1
         && data.score <= data.totalQuestions
         && data.summaryText is string && data.summaryText.size() <= 4000
+        && (!('questions' in data) || (data.questions is list && data.questions.size() >= 1 && data.questions.size() <= 1000 && data.questions[0] is map))
+        && (!('mcqSelections' in data) || (data.mcqSelections is map && data.mcqSelections.size() <= 1000))
+        && (!('shortAnswers' in data) || (data.shortAnswers is map && data.shortAnswers.size() <= 1000))
+        && (!('shortGrades' in data) || (data.shortGrades is map && data.shortGrades.size() <= 1000))
         && data.createdAt is timestamp;
     }
 

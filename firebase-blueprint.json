@@ -271,6 +271,22 @@
           "type": "string",
           "maxLength": 4000
         },
+        "questions": {
+          "type": "array",
+          "description": "Saved quiz questions so past attempts can be reviewed or retaken."
+        },
+        "mcqSelections": {
+          "type": "object",
+          "description": "Map of question ID to selected multiple-choice option index."
+        },
+        "shortAnswers": {
+          "type": "object",
+          "description": "Map of question ID to student short-answer response."
+        },
+        "shortGrades": {
+          "type": "object",
+          "description": "Map of question ID to grading result and feedback."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"

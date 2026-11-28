@@ -52,6 +52,15 @@ test('mapAiError distinguishes API_NOT_ENABLED, 403 App Check, and 429 quota err
   assert.equal(appCheckErr.code, 'app_check_or_403');
   assert.equal(appCheckErr.retryable, false);
 
+  const debugExchangeErr = mapAiError(
+    new Error('POST :exchangeDebugToken 403 (appCheck/fetch-status-error)'),
+    'only_in_cloud',
+    true
+  );
+  assert.equal(debugExchangeErr.code, 'app_check_or_403');
+  assert.match(debugExchangeErr.message, /Manage debug tokens/i);
+  assert.match(debugExchangeErr.message, /1:347676576464:web:96a145247bc2fdbab0acd5/);
+
   const quotaErr = mapAiError(new Error('429 RESOURCE_EXHAUSTED'), 'only_in_cloud', true);
   assert.equal(quotaErr.code, 'quota_429');
   assert.equal(quotaErr.retryable, true);
@@ -63,6 +72,8 @@ test('shouldUseServerHybridFallback strictly respects only_on_device and offline
   assert.equal(shouldUseServerHybridFallback(apiErr, 'prefer_on_device', false), false);
   assert.equal(shouldUseServerHybridFallback(apiErr, 'prefer_on_device', true), true);
   assert.equal(shouldUseServerHybridFallback(new Error('403 App Check'), 'only_in_cloud', true), true);
+  assert.equal(shouldUseServerHybridFallback(new Error('initial-throttle'), 'prefer_on_device', true), true);
+  assert.equal(shouldUseServerHybridFallback(new Error('Model not found'), 'prefer_in_cloud', true), true);
 });
 
 test('hybridAi initializes gracefully with safe defaults when optional env vars are unset', () => {
