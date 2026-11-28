@@ -30,24 +30,20 @@ import type { AppCheckStatus } from './types';
 const DEFAULT_PUBLIC_RECAPTCHA_ENTERPRISE_KEY =
   '6Ldp2CwuAAAAAMzBAZAW1VKn7gSm3zycawyAyzGF';
 
-const IS_DEV_MODE = Boolean(import.meta.env?.DEV);
-
-function getConfiguredDevDebugToken(): string | boolean {
-  const rawEnvDebugToken = String(
-    import.meta.env?.VITE_APPCHECK_DEBUG_TOKEN ?? ''
-  )
-    .trim()
-    .replace(/^["']|["']$/g, '')
-    .trim();
-  return rawEnvDebugToken || true;
-}
+const IS_DEV_MODE = import.meta.env ? import.meta.env.DEV : false;
 
 // Development-only: assign FIREBASE_APPCHECK_DEBUG_TOKEN synchronously BEFORE initializeApp / initializeAppCheck.
-// In production builds (`import.meta.env.DEV === false`), FIREBASE_APPCHECK_DEBUG_TOKEN is never set.
+// In production builds (`import.meta.env.DEV === false`), this branch is stripped and FIREBASE_APPCHECK_DEBUG_TOKEN is never set.
 let devDebugModeEnabled = false;
 if (typeof window !== 'undefined') {
   if (IS_DEV_MODE) {
-    const debugTokenSetting = getConfiguredDevDebugToken();
+    const rawEnvDebugToken = String(
+      (import.meta.env ? import.meta.env.VITE_APPCHECK_DEBUG_TOKEN : '') ?? ''
+    )
+      .trim()
+      .replace(/^["']|["']$/g, '')
+      .trim();
+    const debugTokenSetting: string | boolean = rawEnvDebugToken || true;
     (
       self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }
     ).FIREBASE_APPCHECK_DEBUG_TOKEN = debugTokenSetting;
