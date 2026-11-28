@@ -17,15 +17,20 @@ import {
   Code2,
   Copy,
   FileEdit,
+  History,
   ImagePlus,
   Lightbulb,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plus,
   Save,
+  Send,
   Sparkles,
   Trash2,
   Wrench,
+  X,
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { generateHybridText } from '../services/hybridAi';
@@ -37,8 +42,24 @@ import {
   HybridInferenceSource,
   InferenceModePreference,
 } from '../types';
+import {
+  ACTION_SUGGESTIONS,
+  TONE_SUGGESTIONS,
+  buildWritingStudioPrompt,
+} from '../utils/createCombobox';
+import {
+  DRAFT_STORAGE_KEYS,
+  readDraft,
+  useAutoSaveDraft,
+} from '../utils/draftStorage';
+import {
+  getTimestampMillis,
+  sortByMostRecentTimestamp,
+} from '../utils/historyUtils';
+import { AutoResizeTextarea } from './AutoResizeTextarea';
 import { InferenceBadge } from './InferenceBadge';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { SearchableCombobox } from './SearchableCombobox';
 
 interface CreateSessionProps {
   user: User | null;
@@ -69,10 +90,10 @@ console.log("Index of 10:", binarySearch(nums, 10));`,
   html: {
     title: 'Responsive Pricing Card',
     code: `<style>
-  body { font-family: system-ui, sans-serif; padding: 24px; background: #f8fafc; color: #0f172a; }
+  body { font-family: system-ui, sans-serif; padding: 24px; background: #f8f9fb; color: #0f172a; }
   .card { max-width: 340px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; }
   .price { font-size: 2rem; font-weight: 700; margin: 8px 0; }
-  button { background: #0284c7; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; }
+  button { background: #ea580c; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; }
 </style>
 <div class="card">
   <h3>Studio Membership</h3>
@@ -119,17 +140,13 @@ ORDER BY avg_percent DESC;`,
   },
 };
 
-function getTimestampMillis(ts: unknown): number {
-  if (!ts) return 0;
-  if (
-    typeof ts === 'object' &&
-    ts !== null &&
-    'toMillis' in ts &&
-    typeof (ts as { toMillis: () => number }).toMillis === 'function'
-  ) {
-    return (ts as { toMillis: () => number }).toMillis();
-  }
-  return 0;
+function formatHistoryDate(ts: unknown): string {
+  const millis = getTimestampMillis(ts);
+  if (!millis) return '';
+  return new Date(millis).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 function extractFirstCodeBlock(markdown: string): string | null {
@@ -151,19 +168,63 @@ export function CreateSession({
   onRequireSignIn,
   inferenceMode,
 }: CreateSessionProps) {
-  const [subMode, setSubMode] = useState<CreateSubMode>('write');
+  const [initialCreateDraft] = useState(() =>
+    readDraft(DRAFT_STORAGE_KEYS.create, {
+      subMode: 'write' as CreateSubMode,
+      draftTitle: 'Hybrid AI Launch Brief',
+      draftPrompt:
+        'Draft a crisp 1-page product launch announcement explaining how local on-device AI plus cloud fallback improves privacy and speed.',
+      draftContent: '',
+      draftCategory: 'writing' as CreateDraftCategory,
+      writeTone: 'professional',
+      writeAction: 'generate',
+      planTopic: 'Weekend Hackathon Demo & QA Checklist',
+      planType: 'plan' as 'brainstorm' | 'plan',
+      planConstraints:
+        '3-person team, 48 hours, focus on hybrid AI reliability and security testing.',
+      codeTitle: STARTER_SNIPPETS.javascript.title,
+      language: 'javascript',
+      code: STARTER_SNIPPETS.javascript.code,
+      mentorPrompt: '',
+    })
+  );
+
+  const [subMode, setSubMode] = useState<CreateSubMode>(() =>
+    initialCreateDraft.subMode === 'write' ||
+    initialCreateDraft.subMode === 'brainstorm' ||
+    initialCreateDraft.subMode === 'code'
+      ? initialCreateDraft.subMode
+      : 'write'
+  );
+
+  // History Notice Board visibility & filter
+  const [desktopHistoryOpen, setDesktopHistoryOpen] = useState(true);
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'drafts' | 'code'>('all');
+  const [createLoadedFlags, setCreateLoadedFlags] = useState(() => ({
+    snippets: !user,
+    drafts: !user,
+  }));
+  const activeHistoryItemRef = useRef<HTMLButtonElement | null>(null);
+  const createHistoryScrollRef = useRef<HTMLDivElement | null>(null);
+  const justCreatedCreateRef = useRef(false);
 
   // Shared Create Drafts from Firestore
   const [drafts, setDrafts] = useState<CreateDraft[]>([]);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
-  const [draftTitle, setDraftTitle] = useState('Hybrid AI Launch Brief');
-  const [draftPrompt, setDraftPrompt] = useState(
-    'Draft a crisp 1-page product launch announcement explaining how local on-device AI plus cloud fallback improves privacy and speed.'
+  const [draftTitle, setDraftTitle] = useState(() => initialCreateDraft.draftTitle);
+  const [draftPrompt, setDraftPrompt] = useState(() => initialCreateDraft.draftPrompt);
+  const [draftContent, setDraftContent] = useState(() => initialCreateDraft.draftContent);
+  const [draftCategory, setDraftCategory] = useState<CreateDraftCategory>(
+    () => initialCreateDraft.draftCategory
   );
-  const [draftContent, setDraftContent] = useState('');
-  const [draftCategory, setDraftCategory] = useState<CreateDraftCategory>('writing');
-  const [writeTone, setWriteTone] = useState<'Clear' | 'Executive' | 'Technical' | 'Creative'>('Clear');
-  const [writeAction, setWriteAction] = useState<'draft' | 'rewrite' | 'condense' | 'expand' | 'polish'>('draft');
+  const [writeTone, setWriteTone] = useState<string>(
+    () => initialCreateDraft.writeTone || 'professional'
+  );
+  const [writeAction, setWriteAction] = useState<string>(
+    () => initialCreateDraft.writeAction || 'generate'
+  );
+  const [comboboxCloseSignal, setComboboxCloseSignal] = useState(0);
   const [draftSource, setDraftSource] = useState<HybridInferenceSource | undefined>(undefined);
   const [draftModel, setDraftModel] = useState('');
   const [draftLatency, setDraftLatency] = useState<number | undefined>(undefined);
@@ -173,24 +234,26 @@ export function CreateSession({
   const [copiedDraft, setCopiedDraft] = useState(false);
 
   // Brainstorm & Plan state
-  const [planTopic, setPlanTopic] = useState('Weekend Hackathon Demo & QA Checklist');
-  const [planType, setPlanType] = useState<'brainstorm' | 'plan'>('plan');
+  const [planTopic, setPlanTopic] = useState(() => initialCreateDraft.planTopic);
+  const [planType, setPlanType] = useState<'brainstorm' | 'plan'>(
+    () => initialCreateDraft.planType
+  );
   const [planConstraints, setPlanConstraints] = useState(
-    '3-person team, 48 hours, focus on hybrid AI reliability and security testing.'
+    () => initialCreateDraft.planConstraints
   );
 
   // Coding Studio state
   const [snippets, setSnippets] = useState<CodeSnippet[]>([]);
   const [activeSnippetId, setActiveSnippetId] = useState<string | null>(null);
-  const [codeTitle, setCodeTitle] = useState(STARTER_SNIPPETS.javascript.title);
-  const [language, setLanguage] = useState('javascript');
-  const [code, setCode] = useState(STARTER_SNIPPETS.javascript.code);
+  const [codeTitle, setCodeTitle] = useState(() => initialCreateDraft.codeTitle);
+  const [language, setLanguage] = useState(() => initialCreateDraft.language);
+  const [code, setCode] = useState(() => initialCreateDraft.code);
   const [output, setOutput] = useState('');
   const [htmlPreview, setHtmlPreview] = useState<string | null>(null);
   const [savingCode, setSavingCode] = useState(false);
   const [saveCodeNotice, setSaveCodeNotice] = useState<string | null>(null);
 
-  const [mentorPrompt, setMentorPrompt] = useState('');
+  const [mentorPrompt, setMentorPrompt] = useState(() => initialCreateDraft.mentorPrompt);
   const [mentorLoading, setMentorLoading] = useState(false);
   const [mentorReply, setMentorReply] = useState('');
   const [mentorModel, setMentorModel] = useState('');
@@ -206,35 +269,63 @@ export function CreateSession({
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  useAutoSaveDraft(DRAFT_STORAGE_KEYS.create, {
+    subMode,
+    draftTitle,
+    draftPrompt,
+    draftContent,
+    draftCategory,
+    writeTone,
+    writeAction,
+    planTopic,
+    planType,
+    planConstraints,
+    codeTitle,
+    language,
+    code,
+    mentorPrompt,
+  });
+
   useEffect(() => {
     if (!user) {
       setSnippets([]);
       setDrafts([]);
       setActiveSnippetId(null);
       setActiveDraftId(null);
+      setCreateLoadedFlags({ snippets: true, drafts: true });
       return;
     }
+
+    setCreateLoadedFlags({ snippets: false, drafts: false });
 
     const unsubSnippets = onSnapshot(
       query(collection(db, 'codeSnippets'), where('ownerId', '==', user.uid)),
       (snap) => {
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<CodeSnippet, 'id'>) }))
-          .sort((a, b) => getTimestampMillis(b.updatedAt) - getTimestampMillis(a.updatedAt));
+        const list = sortByMostRecentTimestamp(
+          snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<CodeSnippet, 'id'>) }))
+        );
         setSnippets(list);
+        setCreateLoadedFlags((prev) => ({ ...prev, snippets: true }));
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'codeSnippets')
+      (err) => {
+        setCreateLoadedFlags((prev) => ({ ...prev, snippets: true }));
+        handleFirestoreError(err, OperationType.LIST, 'codeSnippets');
+      }
     );
 
     const unsubDrafts = onSnapshot(
       query(collection(db, 'createDrafts'), where('ownerId', '==', user.uid)),
       (snap) => {
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<CreateDraft, 'id'>) }))
-          .sort((a, b) => getTimestampMillis(b.updatedAt) - getTimestampMillis(a.updatedAt));
+        const list = sortByMostRecentTimestamp(
+          snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<CreateDraft, 'id'>) }))
+        );
         setDrafts(list);
+        setCreateLoadedFlags((prev) => ({ ...prev, drafts: true }));
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'createDrafts')
+      (err) => {
+        setCreateLoadedFlags((prev) => ({ ...prev, drafts: true }));
+        handleFirestoreError(err, OperationType.LIST, 'createDrafts');
+      }
     );
 
     return () => {
@@ -243,26 +334,101 @@ export function CreateSession({
     };
   }, [user]);
 
+  const openSavedDraft = (draft: CreateDraft) => {
+    setActiveDraftId(draft.id);
+    setDraftTitle(draft.title);
+    setDraftContent(draft.content);
+    setDraftCategory(draft.category);
+    setDraftSource(draft.inferenceSource);
+    setDraftError(null);
+    if (draft.category === 'brainstorm' || draft.category === 'plan') {
+      setSubMode('brainstorm');
+      setPlanType(draft.category);
+      setPlanTopic(draft.title);
+    } else {
+      setSubMode('write');
+    }
+    setMobileHistoryOpen(false);
+  };
+
+  const openSavedSnippet = (snippet: CodeSnippet) => {
+    setActiveSnippetId(snippet.id);
+    setCodeTitle(snippet.title);
+    setLanguage(snippet.language);
+    setCode(snippet.code);
+    setOutput(snippet.lastOutput || '');
+    setHtmlPreview(null);
+    setSubMode('code');
+    setMobileHistoryOpen(false);
+  };
+
+  const ensureValidCreateSelectionOnHistoryOpen = () => {
+    const hasActiveDraft = Boolean(
+      subMode !== 'code' && activeDraftId && drafts.some((d) => d.id === activeDraftId)
+    );
+    const hasActiveSnippet = Boolean(
+      subMode === 'code' && activeSnippetId && snippets.some((s) => s.id === activeSnippetId)
+    );
+
+    if (hasActiveDraft || hasActiveSnippet) {
+      setTimeout(() => {
+        activeHistoryItemRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }, 90);
+      return;
+    }
+
+    const scrollTop = () => {
+      setTimeout(() => {
+        createHistoryScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 90);
+    };
+
+    if (subMode === 'code') {
+      if (snippets.length > 0) {
+        openSavedSnippet(snippets[0]);
+        scrollTop();
+      } else if (drafts.length > 0) {
+        setActiveDraftId(drafts[0].id);
+        scrollTop();
+      }
+      return;
+    }
+
+    if (drafts.length > 0) {
+      openSavedDraft(drafts[0]);
+      scrollTop();
+    } else if (snippets.length > 0) {
+      setActiveSnippetId(snippets[0].id);
+      scrollTop();
+    }
+  };
+
+  const toggleDesktopHistory = () => {
+    setDesktopHistoryOpen((prev) => {
+      const next = !prev;
+      if (next) ensureValidCreateSelectionOnHistoryOpen();
+      return next;
+    });
+  };
+
+  const openMobileHistory = () => {
+    ensureValidCreateSelectionOnHistoryOpen();
+    setMobileHistoryOpen(true);
+  };
+
   const runWritingStudio = async () => {
+    setComboboxCloseSignal((n) => n + 1);
     if (!draftPrompt.trim() && !draftContent.trim()) return;
     setDraftError(null);
     setDraftLoading(true);
 
-    const isRewrite = writeAction !== 'draft' && draftContent.trim().length > 0;
-    const category: CreateDraftCategory = isRewrite ? 'rewrite' : 'writing';
+    const { category, prompt: fullPrompt } = buildWritingStudioPrompt({
+      action: writeAction,
+      tone: writeTone,
+      instructions: draftPrompt,
+      sourceText: draftContent,
+    });
     setDraftCategory(category);
-
-    const actionDirective: Record<typeof writeAction, string> = {
-      draft: `Write a polished, original ${writeTone.toLowerCase()} draft based on the user's request.`,
-      rewrite: `Rewrite the provided text in a ${writeTone.toLowerCase()} tone while preserving key meaning.`,
-      condense: `Condense the provided text into a crisp, high-impact ${writeTone.toLowerCase()} version.`,
-      expand: `Expand the provided text with clear examples, transitions, and detail in a ${writeTone.toLowerCase()} tone.`,
-      polish: `Proofread and edit the provided text for grammar, flow, clarity, and impact (${writeTone.toLowerCase()} tone).`,
-    };
-
-    const fullPrompt = isRewrite
-      ? `${actionDirective[writeAction]}\n\nAdditional instruction: ${draftPrompt || 'None'}\n\nSource text:\n${draftContent}`
-      : `${actionDirective.draft}\n\nTopic / Brief:\n${draftPrompt}`;
 
     try {
       const result = await generateHybridText({
@@ -338,6 +504,7 @@ export function CreateSession({
         });
       } else {
         const ref = doc(collection(db, 'createDrafts'));
+        justCreatedCreateRef.current = true;
         await setDoc(ref, {
           ownerId: user.uid,
           category: draftCategory,
@@ -352,6 +519,7 @@ export function CreateSession({
       setDraftSaveMsg('Saved');
       setTimeout(() => setDraftSaveMsg(null), 2000);
     } catch (err) {
+      justCreatedCreateRef.current = false;
       handleFirestoreError(err, OperationType.WRITE, 'createDrafts');
     }
   };
@@ -448,6 +616,7 @@ export function CreateSession({
         });
       } else {
         const ref = doc(collection(db, 'codeSnippets'));
+        justCreatedCreateRef.current = true;
         await setDoc(ref, {
           ownerId: user.uid,
           title: safeTitle,
@@ -462,6 +631,7 @@ export function CreateSession({
       setSaveCodeNotice('Saved');
       setTimeout(() => setSaveCodeNotice(null), 2000);
     } catch (err) {
+      justCreatedCreateRef.current = false;
       handleFirestoreError(err, OperationType.WRITE, 'codeSnippets');
     } finally {
       setSavingCode(false);
@@ -476,6 +646,18 @@ export function CreateSession({
     setOutput('');
     setHtmlPreview(null);
     setMentorReply('');
+  };
+
+  const handleDeleteSnippet = async (id: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'codeSnippets', id));
+      if (activeSnippetId === id) {
+        handleNewSnippet();
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `codeSnippets/${id}`);
+    }
   };
 
   const runMentorAction = async (
@@ -543,672 +725,927 @@ export function CreateSession({
 
   const lineCount = code.split('\n').length;
   const suggestedCode = mentorReply ? extractFirstCodeBlock(mentorReply) : null;
+  const normalizedAction = writeAction.trim().toLowerCase();
+  const isFreshAction =
+    normalizedAction === 'generate' ||
+    normalizedAction === 'draft' ||
+    draftContent.trim().length === 0;
+  const primaryWriteLabel = isFreshAction
+    ? 'Generate Draft'
+    : `Apply ${writeAction.trim() || 'AI Edit'}`;
 
-  return (
-    <div className="flex-1 bg-slate-50 dark:bg-slate-950">
-      <div className="max-w-[1440px] mx-auto px-4 sm:px-8 py-6 space-y-5">
-        {/* Create Header + Internal Experience Switcher */}
-        <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-          <div className="space-y-1">
-            <h1 className="text-2xl font-bold font-display text-slate-900 dark:text-white">
-              Create Studio
-            </h1>
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              Write &amp; rewrite content, brainstorm plans, and build or debug code using Firebase AI Logic Hybrid Inference.
-            </p>
+  const createHistoryLoading = Boolean(
+    user && (!createLoadedFlags.snippets || !createLoadedFlags.drafts)
+  );
+
+  useEffect(() => {
+    if (!justCreatedCreateRef.current) return;
+    justCreatedCreateRef.current = false;
+    requestAnimationFrame(() => {
+      createHistoryScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  }, [drafts.length, snippets.length]);
+
+  const showDraftsInHistory = historyFilter === 'all' || historyFilter === 'drafts';
+  const showCodeInHistory = historyFilter === 'all' || historyFilter === 'code';
+  const totalCreateHistoryCount = drafts.length + snippets.length;
+
+  const createHistoryContent = (
+    <div className="flex flex-col h-fit max-h-full w-72 md:w-72 shrink-0 bg-white dark:bg-[#161C24] border-r border-b border-slate-200 dark:border-slate-800 rounded-br-2xl shadow-xs overflow-hidden">
+      <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 space-y-2.5 shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <History className="w-4 h-4 text-orange-600 dark:text-amber-400" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+              Create History
+            </span>
           </div>
-
-          <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-200/70 dark:bg-slate-800 overflow-x-auto">
+          <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setSubMode('write')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                subMode === 'write'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
+              onClick={toggleDesktopHistory}
+              aria-label="Hide create history"
+              title="Hide history"
+              className="hidden md:inline-flex p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
-              <FileEdit className="w-4 h-4" />
-              Write &amp; Rewrite
+              <PanelLeftClose className="w-4 h-4" />
             </button>
             <button
               type="button"
-              onClick={() => setSubMode('brainstorm')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                subMode === 'brainstorm'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
+              onClick={() => setMobileHistoryOpen(false)}
+              aria-label="Close create history"
+              className="md:hidden p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
             >
-              <Lightbulb className="w-4 h-4" />
-              Brainstorm &amp; Plan
-            </button>
-            <button
-              type="button"
-              onClick={() => setSubMode('code')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                subMode === 'code'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Code2 className="w-4 h-4" />
-              Code Studio
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* SUB-MODE 1 & 2: WRITE / REWRITE / BRAINSTORM / PLAN */}
-        {(subMode === 'write' || subMode === 'brainstorm') && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-8 space-y-4">
-              {subMode === 'write' ? (
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
-                  <div className="grid sm:grid-cols-3 gap-3">
-                    <div className="sm:col-span-1">
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                        Draft Title
-                      </label>
-                      <input
-                        type="text"
-                        value={draftTitle}
-                        onChange={(e) => setDraftTitle(e.target.value)}
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+        <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-800">
+          {(
+            [
+              { id: 'all', label: 'All' },
+              { id: 'drafts', label: 'Drafts' },
+              { id: 'code', label: 'Code' },
+            ] as const
+          ).map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setHistoryFilter(f.id)}
+              className={`py-1 text-[11px] font-medium rounded transition-colors ${
+                historyFilter === f.id
+                  ? 'bg-white dark:bg-slate-900 text-orange-600 dark:text-amber-400 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div ref={createHistoryScrollRef} className="flex-1 min-h-0 overflow-y-auto p-3 space-y-4">
+        {createHistoryLoading ? (
+          <div className="space-y-1.5 py-1" aria-label="Loading create history">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="h-11 rounded-lg bg-slate-100 dark:bg-slate-800/70 animate-pulse"
+              />
+            ))}
+          </div>
+        ) : !user ? (
+          <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/60 space-y-2.5 text-xs text-slate-600 dark:text-slate-400">
+            <p>
+              Sign in with Google to save and reopen your writing drafts, brainstorm plans, and code snippets across sessions.
+            </p>
+            <button
+              type="button"
+              onClick={onRequireSignIn}
+              className="w-full px-3 py-1.5 font-medium rounded-lg bg-orange-600 hover:bg-orange-500 text-white transition-colors"
+            >
+              Sign in with Google
+            </button>
+          </div>
+        ) : totalCreateHistoryCount === 0 ? (
+          <div className="px-2 py-4 text-center space-y-1">
+            <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              No saved creations yet
+            </p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Save a draft, brainstorm plan, or code snippet to access it quickly from here.
+            </p>
+          </div>
+        ) : (
+          <>
+            {showDraftsInHistory && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Drafts &amp; Plans ({drafts.length})
+                  </span>
+                </div>
+                {drafts.length === 0 ? (
+                  <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
+                    No saved drafts or plans yet.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {drafts.map((d) => {
+                      const isActive = subMode !== 'code' && activeDraftId === d.id;
+                      const dateLabel = formatHistoryDate(d.updatedAt);
+                      return (
+                        <div
+                          key={d.id}
+                          className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border transition-colors ${
+                            isActive
+                              ? 'border-orange-300 dark:border-orange-700 bg-orange-50/70 dark:bg-orange-950/35'
+                              : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                          }`}
+                        >
+                          <button
+                            ref={isActive ? activeHistoryItemRef : null}
+                            type="button"
+                            onClick={() => openSavedDraft(d)}
+                            className="flex-1 text-left min-w-0"
+                          >
+                            <p className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate">
+                              {d.title}
+                            </p>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 capitalize truncate">
+                              {d.category}
+                              {dateLabel ? ` · ${dateLabel}` : ''}
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteDraft(d.id)}
+                            aria-label={`Delete ${d.title}`}
+                            className="p-1 text-slate-400 hover:text-red-600 shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {showCodeInHistory && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Code Snippets ({snippets.length})
+                  </span>
+                </div>
+                {snippets.length === 0 ? (
+                  <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
+                    No saved code snippets yet.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {snippets.map((s) => {
+                      const isActive = subMode === 'code' && activeSnippetId === s.id;
+                      const dateLabel = formatHistoryDate(s.updatedAt);
+                      return (
+                        <div
+                          key={s.id}
+                          className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border transition-colors ${
+                            isActive
+                              ? 'border-orange-300 dark:border-orange-700 bg-orange-50/70 dark:bg-orange-950/35'
+                              : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                          }`}
+                        >
+                          <button
+                            ref={isActive ? activeHistoryItemRef : null}
+                            type="button"
+                            onClick={() => openSavedSnippet(s)}
+                            className="flex-1 text-left min-w-0"
+                          >
+                            <p className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate">
+                              {s.title}
+                            </p>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                              {s.language}
+                              {dateLabel ? ` · ${dateLabel}` : ''}
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteSnippet(s.id)}
+                            aria-label={`Delete ${s.title}`}
+                            className="p-1 text-slate-400 hover:text-red-600 shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-1 min-h-0 overflow-hidden bg-[#F8F9FB] dark:bg-[#0F1419] relative">
+      {/* Desktop Collapsible Space-Efficient Create History Notice Board */}
+      <aside
+        aria-label="Create history notice board"
+        aria-hidden={!desktopHistoryOpen}
+        className={`hidden md:flex shrink-0 flex-col bg-transparent overflow-hidden transition-[width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+          desktopHistoryOpen
+            ? 'w-72 opacity-100 translate-x-0'
+            : 'w-0 opacity-0 -translate-x-3 pointer-events-none'
+        }`}
+      >
+        {createHistoryContent}
+      </aside>
+
+      {/* Mobile Slide-Over Create History Drawer (space-efficient height) */}
+      <div
+        className={`fixed inset-0 z-40 md:hidden flex items-start transition-opacity duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+          mobileHistoryOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+        aria-hidden={!mobileHistoryOpen}
+      >
+        <div
+          className="fixed inset-0 bg-slate-950/55 transition-opacity duration-300"
+          onClick={() => setMobileHistoryOpen(false)}
+        />
+        <aside
+          className={`relative z-10 w-72 max-w-[85vw] max-h-[85dvh] flex flex-col bg-transparent transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            mobileHistoryOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          {createHistoryContent}
+        </aside>
+      </div>
+
+      {/* Main Create Workspace */}
+      <section className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* Top Create Workspace Toolbar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-2.5 bg-white dark:bg-[#161C24] border-b border-slate-200 dark:border-slate-800 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={openMobileHistory}
+              aria-label="Show create history"
+              className="md:hidden inline-flex items-center gap-1 h-7 px-2 text-[11px] font-medium rounded-md border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-orange-300 dark:hover:border-orange-700 whitespace-nowrap"
+            >
+              <History className="w-3 h-3 text-orange-600 dark:text-amber-400" />
+              History
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleDesktopHistory}
+              title={desktopHistoryOpen ? 'Hide create history' : 'Show create history'}
+              aria-label={desktopHistoryOpen ? 'Hide create history' : 'Show create history'}
+              className="hidden md:inline-flex items-center gap-1 h-7 px-2 text-[11px] font-medium rounded-md border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-orange-300 dark:hover:border-orange-700 hover:bg-orange-50/50 dark:hover:bg-orange-950/30 transition-colors whitespace-nowrap"
+            >
+              {desktopHistoryOpen ? (
+                <>
+                  <PanelLeftClose className="w-3 h-3 text-orange-600 dark:text-amber-400" />
+                  Hide
+                </>
+              ) : (
+                <>
+                  <PanelLeftOpen className="w-3 h-3 text-orange-600 dark:text-amber-400" />
+                  Show History
+                </>
+              )}
+            </button>
+
+            <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-800 overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => setSubMode('write')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  subMode === 'write'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <FileEdit className="w-3.5 h-3.5" />
+                Write &amp; Rewrite
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubMode('brainstorm')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  subMode === 'brainstorm'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Lightbulb className="w-3.5 h-3.5" />
+                Brainstorm &amp; Plan
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubMode('code')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  subMode === 'code'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Code2 className="w-3.5 h-3.5" />
+                Code Studio
+              </button>
+            </div>
+          </div>
+
+          <span className="hidden xl:inline text-xs text-slate-500 dark:text-slate-400">
+            Hybrid AI Writing, Strategy &amp; Code Workbench
+          </span>
+        </div>
+
+        {/* Scrollable Studio Canvas */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pt-5 pb-6">
+          <div className="max-w-6xl mx-auto space-y-5">
+            {/* SUB-MODE 1 & 2: WRITE / REWRITE / BRAINSTORM / PLAN */}
+            {(subMode === 'write' || subMode === 'brainstorm') && (
+              <div className="space-y-4">
+                {subMode === 'write' ? (
+                  <div className="bg-white dark:bg-[#161C24] border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-3">
+                    <div className="grid sm:grid-cols-3 gap-3 items-end">
+                      <div className="sm:col-span-1">
+                        <label
+                          htmlFor="create-draft-title"
+                          className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5"
+                        >
+                          Draft Title
+                        </label>
+                        <input
+                          id="create-draft-title"
+                          type="text"
+                          value={draftTitle}
+                          onChange={(e) => setDraftTitle(e.target.value)}
+                          className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/40 focus:border-orange-500"
+                        />
+                      </div>
+
+                      <SearchableCombobox
+                        label="Action"
+                        value={writeAction}
+                        onChange={setWriteAction}
+                        suggestions={ACTION_SUGGESTIONS}
+                        placeholder="Type any action (e.g. rewrite, summarize)..."
+                        closeSignal={comboboxCloseSignal}
+                      />
+
+                      <SearchableCombobox
+                        label="Tone"
+                        value={writeTone}
+                        onChange={setWriteTone}
+                        suggestions={TONE_SUGGESTIONS}
+                        placeholder="Type any tone (e.g. professional, friendly)..."
+                        closeSignal={comboboxCloseSignal}
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                        Action
-                      </label>
-                      <select
-                        value={writeAction}
-                        onChange={(e) =>
-                          setWriteAction(e.target.value as typeof writeAction)
-                        }
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+
+                    <div className="flex items-center justify-between gap-3 pt-1">
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        Use the stationary prompt composer below to generate or transform your draft.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveDraftId(null);
+                          setDraftTitle('New Draft');
+                          setDraftContent('');
+                          setDraftSource(undefined);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
                       >
-                        <option value="draft">Draft from Prompt</option>
-                        <option value="rewrite">Rewrite Existing Text</option>
-                        <option value="condense">Condense &amp; Tighten</option>
-                        <option value="expand">Expand with Detail</option>
-                        <option value="polish">Proofread &amp; Polish</option>
-                      </select>
+                        <Plus className="w-3.5 h-3.5" />
+                        Clear Canvas
+                      </button>
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                        Tone
-                      </label>
-                      <select
-                        value={writeTone}
-                        onChange={(e) => setWriteTone(e.target.value as typeof writeTone)}
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  </div>
+                ) : (
+                  <div className="bg-white dark:bg-[#161C24] border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-3">
+                    <div className="grid sm:grid-cols-3 gap-3">
+                      <div>
+                        <label
+                          htmlFor="create-plan-format"
+                          className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5"
+                        >
+                          Format
+                        </label>
+                        <select
+                          id="create-plan-format"
+                          value={planType}
+                          onChange={(e) => setPlanType(e.target.value as 'brainstorm' | 'plan')}
+                          className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/40 focus:border-orange-500"
+                        >
+                          <option value="plan">Structured Plan &amp; Checklist</option>
+                          <option value="brainstorm">Idea Brainstorm</option>
+                        </select>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label
+                          htmlFor="create-plan-constraints"
+                          className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5"
+                        >
+                          Constraints, Audience, or Timeline
+                        </label>
+                        <input
+                          id="create-plan-constraints"
+                          type="text"
+                          value={planConstraints}
+                          onChange={(e) => setPlanConstraints(e.target.value)}
+                          className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/40 focus:border-orange-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {draftError && (
+                  <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{draftError}</span>
+                  </div>
+                )}
+
+                {/* Output & Editable Canvas */}
+                <div className="bg-white dark:bg-[#161C24] border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-900 dark:text-white">
+                        Document Canvas
+                      </span>
+                      {draftSource && (
+                        <InferenceBadge
+                          source={draftSource}
+                          modelUsed={draftModel}
+                          latencyMs={draftLatency}
+                        />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!draftContent) return;
+                          try {
+                            await navigator.clipboard.writeText(draftContent);
+                            setCopiedDraft(true);
+                            setTimeout(() => setCopiedDraft(false), 1600);
+                          } catch {
+                            // ignore
+                          }
+                        }}
+                        disabled={!draftContent}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap"
                       >
-                        <option value="Clear">Clear &amp; Direct</option>
-                        <option value="Executive">Executive</option>
-                        <option value="Technical">Technical</option>
-                        <option value="Creative">Creative</option>
-                      </select>
+                        {copiedDraft ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-500" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                        {copiedDraft ? 'Copied' : 'Copy'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveDraft}
+                        disabled={!draftContent.trim()}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg bg-slate-900 dark:bg-orange-600 text-white hover:bg-slate-800 dark:hover:bg-orange-500 disabled:opacity-40 transition-colors whitespace-nowrap"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        {draftSaveMsg || 'Save to Firestore'}
+                      </button>
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                      Prompt or Editing Instructions
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={draftPrompt}
-                      onChange={(e) => setDraftPrompt(e.target.value)}
-                      placeholder="Describe what to write or how to edit the draft below..."
-                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  <textarea
+                    rows={10}
+                    value={draftContent}
+                    onChange={(e) => setDraftContent(e.target.value)}
+                    placeholder="Generated output appears here, or paste existing text to rewrite/transform..."
+                    className="w-full p-3.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#0F1419] font-sans text-sm leading-relaxed text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-500/40 focus:border-orange-500"
+                  />
+
+                  {draftContent && (
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+                      <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+                        Formatted Preview
+                      </p>
+                      <MarkdownRenderer content={draftContent} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* SUB-MODE 3: CODE STUDIO */}
+            {subMode === 'code' && (
+              <div className="space-y-4">
+                {/* Top Workbench Controls */}
+                <div className="bg-white dark:bg-[#161C24] border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[240px]">
+                    <Code2 className="w-4 h-4 text-orange-600 dark:text-amber-400 shrink-0" />
+                    <input
+                      type="text"
+                      value={codeTitle}
+                      onChange={(e) => setCodeTitle(e.target.value)}
+                      aria-label="Snippet title"
+                      className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white w-56 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
                     />
+                    <select
+                      value={language}
+                      onChange={(e) => handleLanguageChange(e.target.value)}
+                      aria-label="Programming language"
+                      className="px-3 py-1.5 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
+                    >
+                      <option value="javascript">JavaScript</option>
+                      <option value="typescript">TypeScript</option>
+                      <option value="html">HTML / CSS</option>
+                      <option value="python">Python</option>
+                      <option value="sql">SQL</option>
+                      <option value="go">Go</option>
+                      <option value="rust">Rust</option>
+                    </select>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button
                       type="button"
-                      onClick={() => {
-                        setActiveDraftId(null);
-                        setDraftTitle('New Draft');
-                        setDraftContent('');
-                        setDraftSource(undefined);
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                      onClick={handleNewSnippet}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      Clear Canvas
+                      New
+                    </button>
+
+                    {activeSnippetId && user && (
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteSnippet(activeSnippetId)}
+                        aria-label="Delete snippet"
+                        className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-red-600 dark:hover:text-red-400"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleSaveSnippet}
+                      disabled={savingCode}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      {saveCodeNotice || (savingCode ? 'Saving...' : 'Save')}
                     </button>
 
                     <button
                       type="button"
-                      onClick={runWritingStudio}
-                      disabled={draftLoading}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white whitespace-nowrap"
+                      onClick={handleRunCode}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-lg bg-orange-600 hover:bg-orange-500 text-white transition-colors whitespace-nowrap"
                     >
-                      {draftLoading ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Sparkles className="w-4 h-4" />
-                      )}
-                      {writeAction === 'draft' ? 'Generate Draft' : 'Apply AI Edit'}
+                      <Play className="w-3.5 h-3.5" />
+                      {language === 'javascript' || language === 'html' ? 'Run' : 'Trace Output'}
                     </button>
                   </div>
                 </div>
-              ) : (
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
-                  <div className="grid sm:grid-cols-3 gap-3">
-                    <div className="sm:col-span-2">
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                        Goal, Project, or Topic
-                      </label>
-                      <input
-                        type="text"
-                        value={planTopic}
-                        onChange={(e) => setPlanTopic(e.target.value)}
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+
+                {/* Two-Pane Workbench */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+                  {/* Left 7 Cols: Editor + Output */}
+                  <div className="lg:col-span-7 flex flex-col gap-4">
+                    <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden flex min-h-[380px]">
+                      <div
+                        aria-hidden="true"
+                        className="select-none py-4 px-3 text-right font-mono text-xs leading-6 text-slate-500 bg-slate-900/80 border-r border-slate-800 tabular-nums"
+                      >
+                        {Array.from({ length: lineCount }).map((_, idx) => (
+                          <div key={idx}>{idx + 1}</div>
+                        ))}
+                      </div>
+                      <textarea
+                        aria-label="Code editor"
+                        value={code}
+                        onChange={(e) => setCode(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Tab') {
+                            e.preventDefault();
+                            const el = e.currentTarget;
+                            const start = el.selectionStart;
+                            const end = el.selectionEnd;
+                            const next = `${code.slice(0, start)}  ${code.slice(end)}`;
+                            setCode(next);
+                            requestAnimationFrame(() => {
+                              el.selectionStart = el.selectionEnd = start + 2;
+                            });
+                          }
+                        }}
+                        spellCheck={false}
+                        className="flex-1 p-4 bg-slate-950 text-slate-100 font-mono text-[13px] leading-6 focus:outline-none resize-y min-h-[380px]"
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                        Format
-                      </label>
-                      <select
-                        value={planType}
-                        onChange={(e) => setPlanType(e.target.value as 'brainstorm' | 'plan')}
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                      >
-                        <option value="plan">Structured Plan &amp; Checklist</option>
-                        <option value="brainstorm">Idea Brainstorm</option>
-                      </select>
+
+                    {/* Output / Preview Panel */}
+                    <div className="bg-white dark:bg-[#161C24] border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                      <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
+                        <span className="font-medium text-slate-800 dark:text-slate-200">
+                          {htmlPreview ? 'Live HTML Preview' : 'Output Console'}
+                        </span>
+                        <span>{language}</span>
+                      </div>
+                      {htmlPreview ? (
+                        <iframe
+                          title="HTML Code Preview"
+                          sandbox="allow-scripts"
+                          srcDoc={htmlPreview}
+                          className="w-full h-56 bg-white border-0"
+                        />
+                      ) : (
+                        <pre className="p-4 text-xs font-mono text-slate-700 dark:text-slate-200 whitespace-pre-wrap min-h-[120px] max-h-64 overflow-y-auto">
+                          {output ||
+                            'Click Run to execute JavaScript/HTML or Trace Output for other languages.'}
+                        </pre>
+                      )}
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                      Constraints, Audience, or Timeline
-                    </label>
-                    <input
-                      type="text"
-                      value={planConstraints}
-                      onChange={(e) => setPlanConstraints(e.target.value)}
-                      className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                    />
-                  </div>
+                  {/* Right 5 Cols: Nimo Coding Mentor */}
+                  <div className="lg:col-span-5 bg-white dark:bg-[#161C24] border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col min-h-[540px]">
+                    <div className="p-4 border-b border-slate-200 dark:border-slate-800 space-y-3">
+                      <div>
+                        <h2 className="text-base font-semibold font-display text-slate-900 dark:text-white">
+                          Nimo Coding Assistant
+                        </h2>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Quick fixes, step-by-step explanation, deep debugging, refactoring, or screenshot-to-code via Firebase AI Logic Hybrid Inference.
+                        </p>
+                      </div>
 
-                  <div className="flex justify-end">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => runMentorAction('quick_fix')}
+                          disabled={mentorLoading}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                        >
+                          <Wrench className="w-3.5 h-3.5" />
+                          Quick Fix
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runMentorAction('explain')}
+                          disabled={mentorLoading}
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                        >
+                          Explain
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runMentorAction('debug_deep')}
+                          disabled={mentorLoading}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-amber-300 hover:bg-orange-100 dark:hover:bg-orange-900/50 whitespace-nowrap"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          Debug Deeply
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runMentorAction('refactor')}
+                          disabled={mentorLoading}
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                        >
+                          Refactor
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                      {mentorError && (
+                        <div className="p-3.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                          <span>{mentorError}</span>
+                        </div>
+                      )}
+
+                      {mentorLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-slate-500 py-8 justify-center">
+                          <Loader2 className="w-4 h-4 animate-spin text-orange-600 dark:text-amber-400" />
+                          <span>Analyzing code via Hybrid Inference...</span>
+                        </div>
+                      ) : mentorReply ? (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <InferenceBadge
+                              source={mentorSource}
+                              modelUsed={mentorModel}
+                              latencyMs={mentorLatency}
+                            />
+                            <div className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(mentorReply);
+                                    setCopiedReply(true);
+                                    setTimeout(() => setCopiedReply(false), 1600);
+                                  } catch {
+                                    // ignore
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-orange-600 dark:hover:text-amber-400 whitespace-nowrap"
+                              >
+                                {copiedReply ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                                {copiedReply ? 'Copied' : 'Copy'}
+                              </button>
+                              {suggestedCode && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCode(suggestedCode)}
+                                  className="font-medium text-orange-600 dark:text-amber-400 hover:underline whitespace-nowrap"
+                                >
+                                  Apply Code to Editor
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <MarkdownRenderer content={mentorReply} />
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500 dark:text-slate-400 py-10 text-center">
+                          Select an action above, attach an error/UI screenshot, or ask Nimo about your code in the bottom composer.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Stationary ChatGPT-Style Rounded Bottom Prompt Composer */}
+        <div className="shrink-0 px-3 sm:px-6 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#F8F9FB]/95 dark:bg-[#0F1419]/95 backdrop-blur-xs">
+          <div className="max-w-3xl mx-auto">
+            {subMode === 'write' && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void runWritingStudio();
+                }}
+                className="rounded-2xl border border-slate-200 dark:border-slate-700/90 bg-white dark:bg-[#161C24] shadow-sm focus-within:border-orange-500 focus-within:ring-2 focus-within:ring-orange-500/20 px-3 pt-2.5 pb-2 transition-colors space-y-2"
+              >
+                <AutoResizeTextarea
+                  id="create-draft-prompt"
+                  value={draftPrompt}
+                  onChange={(e) => setDraftPrompt(e.target.value)}
+                  onFocus={() => setComboboxCloseSignal((n) => n + 1)}
+                  onSubmit={() => {
+                    if (!draftLoading && (draftPrompt.trim() || draftContent.trim())) {
+                      void runWritingStudio();
+                    }
+                  }}
+                  maxHeightPx={156}
+                  placeholder="Describe what to write or how to transform the draft above..."
+                  aria-label="Prompt or editing instructions"
+                  className="w-full bg-transparent px-1 py-1 text-sm leading-relaxed text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none"
+                />
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                    Action: <strong className="font-medium text-slate-700 dark:text-slate-200 capitalize">{writeAction.trim() || 'generate'}</strong> · Tone:{' '}
+                    <strong className="font-medium text-slate-700 dark:text-slate-200 capitalize">{writeTone.trim() || 'neutral'}</strong>
+                  </span>
+
+                  <div className="flex items-center gap-2.5 ml-auto">
+                    <span className="hidden sm:inline text-[11px] text-slate-400 dark:text-slate-500 select-none">
+                      Enter to run · Shift+Enter newline
+                    </span>
                     <button
-                      type="button"
-                      onClick={runBrainstormStudio}
-                      disabled={draftLoading}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white whitespace-nowrap"
+                      type="submit"
+                      disabled={draftLoading || (!draftPrompt.trim() && !draftContent.trim())}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white transition-colors whitespace-nowrap shrink-0 shadow-xs"
                     >
                       {draftLoading ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       ) : (
-                        <Lightbulb className="w-4 h-4" />
+                        <Sparkles className="w-3.5 h-3.5" />
+                      )}
+                      <span className="capitalize">{primaryWriteLabel}</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+
+            {subMode === 'brainstorm' && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void runBrainstormStudio();
+                }}
+                className="rounded-2xl border border-slate-200 dark:border-slate-700/90 bg-white dark:bg-[#161C24] shadow-sm focus-within:border-orange-500 focus-within:ring-2 focus-within:ring-orange-500/20 px-3 pt-2.5 pb-2 transition-colors space-y-2"
+              >
+                <AutoResizeTextarea
+                  id="create-plan-topic"
+                  value={planTopic}
+                  onChange={(e) => setPlanTopic(e.target.value)}
+                  onSubmit={() => {
+                    if (!draftLoading && planTopic.trim()) {
+                      void runBrainstormStudio();
+                    }
+                  }}
+                  maxHeightPx={156}
+                  placeholder="Enter a goal, project, or topic to brainstorm or plan..."
+                  aria-label="Goal, project, or topic"
+                  className="w-full bg-transparent px-1 py-1 text-sm leading-relaxed text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none"
+                />
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                    {planType === 'brainstorm' ? 'Idea Brainstorm' : 'Structured Plan & Checklist'}
+                  </span>
+
+                  <div className="flex items-center gap-2.5 ml-auto">
+                    <span className="hidden sm:inline text-[11px] text-slate-400 dark:text-slate-500 select-none">
+                      Enter to run · Shift+Enter newline
+                    </span>
+                    <button
+                      type="submit"
+                      disabled={draftLoading || !planTopic.trim()}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white transition-colors whitespace-nowrap shrink-0 shadow-xs"
+                    >
+                      {draftLoading ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Lightbulb className="w-3.5 h-3.5" />
                       )}
                       {planType === 'brainstorm' ? 'Brainstorm Ideas' : 'Build Execution Plan'}
                     </button>
                   </div>
                 </div>
-              )}
+              </form>
+            )}
 
-              {draftError && (
-                <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{draftError}</span>
-                </div>
-              )}
-
-              {/* Output & Editable Canvas */}
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold text-slate-900 dark:text-white">
-                      Document Canvas
-                    </span>
-                    {draftSource && (
-                      <InferenceBadge
-                        source={draftSource}
-                        modelUsed={draftModel}
-                        latencyMs={draftLatency}
-                      />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (!draftContent) return;
-                        try {
-                          await navigator.clipboard.writeText(draftContent);
-                          setCopiedDraft(true);
-                          setTimeout(() => setCopiedDraft(false), 1600);
-                        } catch {
-                          // ignore
-                        }
-                      }}
-                      disabled={!draftContent}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap"
-                    >
-                      {copiedDraft ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-500" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5" />
-                      )}
-                      {copiedDraft ? 'Copied' : 'Copy'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveDraft}
-                      disabled={!draftContent.trim()}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg bg-slate-900 dark:bg-sky-600 text-white hover:bg-slate-800 dark:hover:bg-sky-700 disabled:opacity-40 whitespace-nowrap"
-                    >
-                      <Save className="w-3.5 h-3.5" />
-                      {draftSaveMsg || 'Save to Firestore'}
-                    </button>
-                  </div>
-                </div>
-
-                <textarea
-                  rows={10}
-                  value={draftContent}
-                  onChange={(e) => setDraftContent(e.target.value)}
-                  placeholder="Generated output appears here, or paste existing text to rewrite/polish..."
-                  className="w-full p-3.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-sans text-sm leading-relaxed text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                />
-
-                {draftContent && (
-                  <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                    <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
-                      Formatted Preview
-                    </p>
-                    <MarkdownRenderer content={draftContent} />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Saved Create Drafts Sidebar */}
-            <aside className="lg:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 h-fit">
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold font-display text-slate-900 dark:text-white">
-                  Saved Drafts &amp; Plans
-                </h2>
-                <span className="text-xs font-mono tabular-nums text-slate-500">
-                  {drafts.length}
-                </span>
-              </div>
-
-              {!user ? (
-                <div className="space-y-2.5 text-xs text-slate-600 dark:text-slate-400">
-                  <p>Sign in with Google to save drafts, rewrites, brainstorms, and plans to Firestore.</p>
-                  <button
-                    type="button"
-                    onClick={onRequireSignIn}
-                    className="px-3 py-1.5 font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800"
-                  >
-                    Sign in with Google
-                  </button>
-                </div>
-              ) : drafts.length === 0 ? (
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  No saved creations yet. Generate a draft or plan and click Save to Firestore.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {drafts.map((d) => (
-                    <div
-                      key={d.id}
-                      className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border transition-colors ${
-                        activeDraftId === d.id
-                          ? 'border-sky-500 bg-sky-50/50 dark:bg-sky-950/30'
-                          : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveDraftId(d.id);
-                          setDraftTitle(d.title);
-                          setDraftContent(d.content);
-                          setDraftCategory(d.category);
-                          setDraftSource(d.inferenceSource);
-                        }}
-                        className="flex-1 text-left min-w-0"
-                      >
-                        <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
-                          {d.title}
-                        </p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 capitalize">
-                          {d.category}
-                        </p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteDraft(d.id)}
-                        aria-label={`Delete ${d.title}`}
-                        className="p-1 text-slate-400 hover:text-red-600"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </aside>
-          </div>
-        )}
-
-        {/* SUB-MODE 3: CODE STUDIO */}
-        {subMode === 'code' && (
-          <div className="space-y-4">
-            {/* Top Workbench Controls */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[260px]">
-                <Code2 className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" />
-                <input
-                  type="text"
-                  value={codeTitle}
-                  onChange={(e) => setCodeTitle(e.target.value)}
-                  aria-label="Snippet title"
-                  className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white w-56"
-                />
-                <select
-                  value={language}
-                  onChange={(e) => handleLanguageChange(e.target.value)}
-                  className="px-3 py-1.5 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-100"
-                >
-                  <option value="javascript">JavaScript</option>
-                  <option value="typescript">TypeScript</option>
-                  <option value="html">HTML / CSS</option>
-                  <option value="python">Python</option>
-                  <option value="sql">SQL</option>
-                  <option value="go">Go</option>
-                  <option value="rust">Rust</option>
-                </select>
-
-                {user && snippets.length > 0 && (
-                  <select
-                    value={activeSnippetId || ''}
-                    onChange={(e) => {
-                      const found = snippets.find((s) => s.id === e.target.value);
-                      if (found) {
-                        setActiveSnippetId(found.id);
-                        setCodeTitle(found.title);
-                        setLanguage(found.language);
-                        setCode(found.code);
-                        setOutput(found.lastOutput || '');
-                        setHtmlPreview(null);
-                      }
-                    }}
-                    className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 max-w-[200px]"
-                  >
-                    <option value="">Load Saved Snippet...</option>
-                    {snippets.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.title} ({s.language})
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleNewSnippet}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  New
-                </button>
-
-                {activeSnippetId && user && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await deleteDoc(doc(db, 'codeSnippets', activeSnippetId));
-                        handleNewSnippet();
-                      } catch (err) {
-                        handleFirestoreError(
-                          err,
-                          OperationType.DELETE,
-                          `codeSnippets/${activeSnippetId}`
-                        );
-                      }
-                    }}
-                    aria-label="Delete snippet"
-                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-red-600 dark:hover:text-red-400"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={handleSaveSnippet}
-                  disabled={savingCode}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  {saveCodeNotice || (savingCode ? 'Saving...' : 'Save')}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleRunCode}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-lg bg-sky-600 hover:bg-sky-700 text-white transition-colors whitespace-nowrap"
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  {language === 'javascript' || language === 'html' ? 'Run' : 'Trace Output'}
-                </button>
-              </div>
-            </div>
-
-            {/* Two-Pane Workbench */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-              {/* Left 7 Cols: Editor + Output */}
-              <div className="lg:col-span-7 flex flex-col gap-4">
-                <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden flex min-h-[380px]">
-                  <div
-                    aria-hidden="true"
-                    className="select-none py-4 px-3 text-right font-mono text-xs leading-6 text-slate-600 bg-slate-900/70 border-r border-slate-800 tabular-nums"
-                  >
-                    {Array.from({ length: lineCount }).map((_, idx) => (
-                      <div key={idx}>{idx + 1}</div>
-                    ))}
-                  </div>
-                  <textarea
-                    aria-label="Code editor"
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Tab') {
-                        e.preventDefault();
-                        const el = e.currentTarget;
-                        const start = el.selectionStart;
-                        const end = el.selectionEnd;
-                        const next = `${code.slice(0, start)}  ${code.slice(end)}`;
-                        setCode(next);
-                        requestAnimationFrame(() => {
-                          el.selectionStart = el.selectionEnd = start + 2;
-                        });
-                      }
-                    }}
-                    spellCheck={false}
-                    className="flex-1 p-4 bg-slate-950 text-slate-100 font-mono text-[13px] leading-6 focus:outline-none resize-y min-h-[380px]"
-                  />
-                </div>
-
-                {/* Output / Preview Panel */}
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                  <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-                    <span className="font-medium text-slate-800 dark:text-slate-200">
-                      {htmlPreview ? 'Live HTML Preview' : 'Output Console'}
-                    </span>
-                    <span>{language}</span>
-                  </div>
-                  {htmlPreview ? (
-                    <iframe
-                      title="HTML Code Preview"
-                      sandbox="allow-scripts"
-                      srcDoc={htmlPreview}
-                      className="w-full h-56 bg-white border-0"
+            {subMode === 'code' && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void runMentorAction(attachedImage ? 'image_to_code' : 'custom');
+                }}
+                className="rounded-2xl border border-slate-200 dark:border-slate-700/90 bg-white dark:bg-[#161C24] shadow-sm focus-within:border-orange-500 focus-within:ring-2 focus-within:ring-orange-500/20 px-3 pt-2.5 pb-2 transition-colors space-y-2"
+              >
+                {attachedImage && (
+                  <div className="inline-flex items-center gap-3 p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
+                    <img
+                      src={attachedImage.previewUrl}
+                      alt="Code screenshot"
+                      referrerPolicy="no-referrer"
+                      className="w-10 h-10 rounded-lg object-cover"
                     />
-                  ) : (
-                    <pre className="p-4 text-xs font-mono text-slate-700 dark:text-slate-200 whitespace-pre-wrap min-h-[120px] max-h-64 overflow-y-auto">
-                      {output ||
-                        'Click Run to execute JavaScript/HTML or Trace Output for other languages.'}
-                    </pre>
-                  )}
-                </div>
-              </div>
-
-              {/* Right 5 Cols: Nimo Coding Mentor */}
-              <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col min-h-[540px]">
-                <div className="p-4 border-b border-slate-200 dark:border-slate-800 space-y-3">
-                  <div>
-                    <h2 className="text-base font-semibold font-display text-slate-900 dark:text-white">
-                      Nimo Coding Assistant
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Quick fixes, step-by-step explanation, deep debugging, refactoring, or screenshot-to-code via Firebase AI Logic Hybrid Inference.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
+                    <span className="text-slate-600 dark:text-slate-300">
+                      Screenshot attached
+                    </span>
                     <button
                       type="button"
-                      onClick={() => runMentorAction('quick_fix')}
-                      disabled={mentorLoading}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+                      onClick={() => setAttachedImage(null)}
+                      aria-label="Remove screenshot"
+                      className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white"
                     >
-                      <Wrench className="w-3.5 h-3.5" />
-                      Quick Fix
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => runMentorAction('explain')}
-                      disabled={mentorLoading}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
-                    >
-                      Explain
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => runMentorAction('debug_deep')}
-                      disabled={mentorLoading}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50 whitespace-nowrap"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Debug Deeply
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => runMentorAction('refactor')}
-                      disabled={mentorLoading}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
-                    >
-                      Refactor
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
-                </div>
+                )}
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {mentorError && (
-                    <div className="p-3.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                      <span>{mentorError}</span>
-                    </div>
-                  )}
-
-                  {mentorLoading ? (
-                    <div className="flex items-center gap-2 text-sm text-slate-500 py-8 justify-center">
-                      <Loader2 className="w-4 h-4 animate-spin text-sky-600" />
-                      <span>Analyzing code via Hybrid Inference...</span>
-                    </div>
-                  ) : mentorReply ? (
-                    <div className="space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-                        <InferenceBadge
-                          source={mentorSource}
-                          modelUsed={mentorModel}
-                          latencyMs={mentorLatency}
-                        />
-                        <div className="flex items-center gap-3">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                await navigator.clipboard.writeText(mentorReply);
-                                setCopiedReply(true);
-                                setTimeout(() => setCopiedReply(false), 1600);
-                              } catch {
-                                // ignore
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-sky-600 whitespace-nowrap"
-                          >
-                            {copiedReply ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-500" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                            {copiedReply ? 'Copied' : 'Copy'}
-                          </button>
-                          {suggestedCode && (
-                            <button
-                              type="button"
-                              onClick={() => setCode(suggestedCode)}
-                              className="font-medium text-sky-600 dark:text-sky-400 hover:underline whitespace-nowrap"
-                            >
-                              Apply Code to Editor
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      <MarkdownRenderer content={mentorReply} />
-                    </div>
-                  ) : (
-                    <p className="text-sm text-slate-500 dark:text-slate-400 py-10 text-center">
-                      Select an action above, attach an error/UI screenshot, or ask Nimo about your code.
-                    </p>
-                  )}
-                </div>
-
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    runMentorAction(attachedImage ? 'image_to_code' : 'custom');
+                <AutoResizeTextarea
+                  value={mentorPrompt}
+                  onChange={(e) => setMentorPrompt(e.target.value)}
+                  onSubmit={() => {
+                    if (!mentorLoading && (mentorPrompt.trim() || attachedImage)) {
+                      void runMentorAction(attachedImage ? 'image_to_code' : 'custom');
+                    }
                   }}
-                  className="p-3.5 border-t border-slate-200 dark:border-slate-800 space-y-2"
-                >
-                  {attachedImage && (
-                    <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
-                      <div className="flex items-center gap-2">
-                        <img
-                          src={attachedImage.previewUrl}
-                          alt="Code screenshot"
-                          referrerPolicy="no-referrer"
-                          className="w-10 h-10 rounded object-cover"
-                        />
-                        <span className="text-slate-600 dark:text-slate-300">
-                          Screenshot attached
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setAttachedImage(null)}
-                        className="text-slate-400 hover:text-slate-700 dark:hover:text-white"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  )}
+                  maxHeightPx={156}
+                  placeholder="Ask Nimo about this code, paste an error, or attach a screenshot..."
+                  aria-label="Ask Nimo coding assistant"
+                  className="w-full bg-transparent px-1 py-1 text-sm leading-relaxed text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none"
+                />
 
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <div className="flex items-center gap-1.5">
                     <input
                       ref={fileInputRef}
                       type="file"
@@ -1221,31 +1658,35 @@ export function CreateSession({
                       onClick={() => fileInputRef.current?.click()}
                       title="Upload UI mockup or error screenshot"
                       aria-label="Attach screenshot"
-                      className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+                      className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
                     >
                       <ImagePlus className="w-4 h-4" />
                     </button>
-                    <input
-                      type="text"
-                      value={mentorPrompt}
-                      onChange={(e) => setMentorPrompt(e.target.value)}
-                      placeholder="Ask Nimo about this snippet..."
-                      className="flex-1 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                    />
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="hidden sm:inline text-[11px] text-slate-400 dark:text-slate-500 select-none">
+                      Enter to ask · Shift+Enter newline
+                    </span>
                     <button
                       type="submit"
                       disabled={mentorLoading || (!mentorPrompt.trim() && !attachedImage)}
-                      className="px-3.5 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white whitespace-nowrap"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white transition-colors whitespace-nowrap shrink-0 shadow-xs"
                     >
-                      Ask
+                      {mentorLoading ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      <span>Ask</span>
                     </button>
                   </div>
-                </form>
-              </div>
-            </div>
+                </div>
+              </form>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      </section>
     </div>
   );
 }

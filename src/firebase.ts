@@ -29,50 +29,42 @@ import type { AppCheckStatus } from './types';
 
 const DEFAULT_PUBLIC_RECAPTCHA_ENTERPRISE_KEY =
   '6Ldp2CwuAAAAAMzBAZAW1VKn7gSm3zycawyAyzGF';
-const PINNED_APPCHECK_DEBUG_TOKEN = '7fc60dee-730b-469a-8b95-44ae4d785d5f';
 
-// Assign FIREBASE_APPCHECK_DEBUG_TOKEN synchronously at module load BEFORE initializeApp/initializeAppCheck.
-// Never set in production builds (`import.meta.env.DEV === false` on non-preview/non-localhost hosts).
-let activePinnedDebugToken: string | null = null;
+const IS_DEV_MODE = Boolean(import.meta.env?.DEV);
+
+function getConfiguredDevDebugToken(): string | boolean {
+  const rawEnvDebugToken = String(
+    import.meta.env?.VITE_APPCHECK_DEBUG_TOKEN ?? ''
+  )
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .trim();
+  return rawEnvDebugToken || true;
+}
+
+// Development-only: assign FIREBASE_APPCHECK_DEBUG_TOKEN synchronously BEFORE initializeApp / initializeAppCheck.
+// In production builds (`import.meta.env.DEV === false`), FIREBASE_APPCHECK_DEBUG_TOKEN is never set.
+let devDebugModeEnabled = false;
 if (typeof window !== 'undefined') {
-  const hostname = window.location.hostname;
-  const isDevOrPreviewHost =
-    import.meta.env.DEV ||
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname.startsWith('ais-dev-') ||
-    hostname === 'scf.usercontent.goog' ||
-    hostname.endsWith('.scf.usercontent.goog') ||
-    hostname === 'aistudio.google.com' ||
-    hostname.endsWith('.aistudio.google.com');
-
-  if (isDevOrPreviewHost) {
-    const rawEnvDebugToken = String(
-      import.meta.env.VITE_APPCHECK_DEBUG_TOKEN ??
-        import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN ??
-        ''
-    )
-      .trim()
-      .replace(/^["']|["']$/g, '')
-      .trim();
-    const tokenSource = rawEnvDebugToken
-      ? 'import.meta.env.VITE_APPCHECK_DEBUG_TOKEN'
-      : 'hardcoded default fallback';
-    const resolvedDebugToken = rawEnvDebugToken || PINNED_APPCHECK_DEBUG_TOKEN;
+  if (IS_DEV_MODE) {
+    const debugTokenSetting = getConfiguredDevDebugToken();
     (
       self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }
-    ).FIREBASE_APPCHECK_DEBUG_TOKEN = resolvedDebugToken;
-    activePinnedDebugToken = resolvedDebugToken;
-    console.info(
-      `[Nimo] App Check environment verified: dev/preview (host="${hostname}", DEV=${String(
-        import.meta.env.DEV
-      )}). Pinned debug token assigned synchronously from ${tokenSource}: ${resolvedDebugToken} (appId: ${firebaseConfig.appId}).`
-    );
+    ).FIREBASE_APPCHECK_DEBUG_TOKEN = debugTokenSetting;
+    devDebugModeEnabled = true;
+
+    if (debugTokenSetting === true) {
+      console.info(
+        `[Nimo] App Check development debug mode enabled (self.FIREBASE_APPCHECK_DEBUG_TOKEN = true). Look for "Firebase App Check debug token: <UUID>" in the console and register it under Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId} -> Manage debug tokens.`
+      );
+    } else {
+      console.info(
+        `[Nimo] App Check development debug mode enabled using VITE_APPCHECK_DEBUG_TOKEN for web app ${firebaseConfig.appId}.`
+      );
+    }
   } else {
     console.info(
-      `[Nimo] App Check environment verified: production (host="${hostname}", DEV=${String(
-        import.meta.env.DEV
-      )}). Debug token disabled.`
+      `[Nimo] App Check production mode active (host="${window.location.hostname}"). Debug token disabled.`
     );
   }
 }
@@ -150,50 +142,29 @@ export function formatAppCheckExchangeError(
           ? `HTTP ${httpStatus}`
           : '',
     ].filter(Boolean);
-    return (
-      `Firebase App Check 403 / authentication failure (${parts.join(' | ')}). Check Google Cloud API key restrictions, Firebase App Check API enablement, and Manage debug tokens for web app ${firebaseConfig.appId}.`
-    );
+
+    const devHint = IS_DEV_MODE
+      ? `In development, copy the "Firebase App Check debug token: <UUID>" printed in your browser console and register it in Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId} -> Manage debug tokens (then refresh).`
+      : `Verify your production reCAPTCHA site key and domain allowlist in Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId}.`;
+
+    return `Firebase App Check 403 / authentication failure (${parts.join(' | ')}). ${devHint}`;
   }
   return null;
 }
 
-async function diagnoseDebugExchangeError(err: unknown): Promise<string | null> {
-  let httpDetails: string | null = null;
-  if (activePinnedDebugToken && typeof fetch === 'function') {
-    try {
-      const endpoint = `https://content-firebaseappcheck.googleapis.com/v1/projects/${encodeURIComponent(
-        firebaseConfig.projectId
-      )}/apps/${encodeURIComponent(
-        firebaseConfig.appId
-      )}:exchangeDebugToken?key=${encodeURIComponent(firebaseConfig.apiKey)}`;
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ debugToken: activePinnedDebugToken }),
-      });
-      if (!res.ok) {
-        const bodyText = (await res.text().catch(() => '')).replace(/\s+/g, ' ').trim();
-        httpDetails = `HTTP ${res.status}${bodyText ? ` ${bodyText.slice(0, 600)}` : ''}`;
-      }
-    } catch (fetchErr) {
-      httpDetails =
-        fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-    }
-  }
-  return formatAppCheckExchangeError(err, httpDetails);
-}
-
-if (typeof window !== 'undefined' && !appCheckInitialized) {
-  appCheckInitialized = true;
-
+function buildAppCheckProvider(): {
+  provider: ReCaptchaEnterpriseProvider | ReCaptchaV3Provider;
+  status: 'active-recaptcha-enterprise' | 'active-recaptcha-v3';
+  providerName: string;
+} | null {
   const explicitEnterpriseKey = String(
-    import.meta.env.VITE_RECAPTCHA_ENTERPRISE_KEY || ''
+    import.meta.env?.VITE_RECAPTCHA_ENTERPRISE_KEY || ''
   )
     .trim()
     .replace(/^["']|["']$/g, '')
     .trim();
   const explicitV3Key = String(
-    import.meta.env.VITE_RECAPTCHA_SITE_KEY ||
+    import.meta.env?.VITE_RECAPTCHA_SITE_KEY ||
       firebaseConfig.recaptchaSiteKey ||
       ''
   )
@@ -207,40 +178,54 @@ if (typeof window !== 'undefined' && !appCheckInitialized) {
     );
   }
 
-  const enterpriseKey =
-    explicitEnterpriseKey ||
-    (!explicitV3Key ? DEFAULT_PUBLIC_RECAPTCHA_ENTERPRISE_KEY : '');
+  if (explicitEnterpriseKey) {
+    return {
+      provider: new ReCaptchaEnterpriseProvider(explicitEnterpriseKey),
+      status: 'active-recaptcha-enterprise',
+      providerName: 'ReCaptchaEnterpriseProvider',
+    };
+  }
+
+  if (explicitV3Key) {
+    return {
+      provider: new ReCaptchaV3Provider(explicitV3Key),
+      status: 'active-recaptcha-v3',
+      providerName: 'ReCaptchaV3Provider',
+    };
+  }
+
+  if (DEFAULT_PUBLIC_RECAPTCHA_ENTERPRISE_KEY) {
+    return {
+      provider: new ReCaptchaEnterpriseProvider(DEFAULT_PUBLIC_RECAPTCHA_ENTERPRISE_KEY),
+      status: 'active-recaptcha-enterprise',
+      providerName: 'ReCaptchaEnterpriseProvider',
+    };
+  }
+
+  return null;
+}
+
+// Initialize Firebase App Check BEFORE Firebase AI Logic, Firestore, and Auth.
+if (typeof window !== 'undefined' && !appCheckInitialized) {
+  appCheckInitialized = true;
 
   try {
-    if (!appCheckInstance) {
-      if (enterpriseKey) {
-        appCheckInstance = initializeAppCheck(app, {
-          provider: new ReCaptchaEnterpriseProvider(enterpriseKey),
-          isTokenAutoRefreshEnabled: true,
-        });
-        detectedAppCheckStatus = 'active-recaptcha-enterprise';
-        console.info(
-          `[Nimo] Firebase App Check initialized (provider: ReCaptchaEnterpriseProvider, debugMode: ${Boolean(
-            activePinnedDebugToken
-          )}).`
-        );
-      } else if (explicitV3Key) {
-        appCheckInstance = initializeAppCheck(app, {
-          provider: new ReCaptchaV3Provider(explicitV3Key),
-          isTokenAutoRefreshEnabled: true,
-        });
-        detectedAppCheckStatus = 'active-recaptcha-v3';
-        console.info(
-          `[Nimo] Firebase App Check initialized (provider: ReCaptchaV3Provider, debugMode: ${Boolean(
-            activePinnedDebugToken
-          )}).`
-        );
-      } else {
-        detectedAppCheckStatus = 'unconfigured-site-key';
-        console.info(
-          '[Nimo] Firebase App Check not initialized (optional): set VITE_RECAPTCHA_SITE_KEY or VITE_RECAPTCHA_ENTERPRISE_KEY to enable App Check attestation.'
-        );
-      }
+    const providerConfig = buildAppCheckProvider();
+
+    if (!appCheckInstance && providerConfig) {
+      appCheckInstance = initializeAppCheck(app, {
+        provider: providerConfig.provider,
+        isTokenAutoRefreshEnabled: true,
+      });
+      detectedAppCheckStatus = providerConfig.status;
+      console.info(
+        `[Nimo] Firebase App Check initialized (${IS_DEV_MODE ? 'development' : 'production'}, provider: ${providerConfig.providerName}, debugMode: ${devDebugModeEnabled}).`
+      );
+    } else if (!appCheckInstance) {
+      detectedAppCheckStatus = 'unconfigured-site-key';
+      console.info(
+        '[Nimo] Firebase App Check not initialized: set VITE_RECAPTCHA_SITE_KEY or VITE_RECAPTCHA_ENTERPRISE_KEY.'
+      );
     }
 
     if (appCheckInstance) {
@@ -251,20 +236,16 @@ if (typeof window !== 'undefined' && !appCheckInitialized) {
           if (!loggedVerificationSuccess && tokenResult?.token) {
             loggedVerificationSuccess = true;
             console.info(
-              `[Nimo] App Check verification status: verified (token active, debugMode: ${Boolean(
-                activePinnedDebugToken
-              )}).`
+              `[Nimo] App Check verification status: verified (token active, debugMode: ${devDebugModeEnabled}).`
             );
           }
         },
         (err) => {
-          void diagnoseDebugExchangeError(err).then((formatted) => {
-            const finalErr =
-              formatted ||
-              (err instanceof Error ? err.message : String(err || 'App Check token error'));
-            console.warn('[Nimo] App Check verification status: FAILED ->', finalErr);
-            setAppCheckError(finalErr);
-          });
+          const formatted =
+            formatAppCheckExchangeError(err) ||
+            (err instanceof Error ? err.message : String(err || 'App Check token error'));
+          console.warn('[Nimo] App Check verification status: FAILED ->', formatted);
+          setAppCheckError(formatted);
         }
       );
 
@@ -273,20 +254,16 @@ if (typeof window !== 'undefined' && !appCheckInitialized) {
           if (!loggedVerificationSuccess && tokenResult?.token) {
             loggedVerificationSuccess = true;
             console.info(
-              `[Nimo] App Check verification status: verified (token active, debugMode: ${Boolean(
-                activePinnedDebugToken
-              )}).`
+              `[Nimo] App Check verification status: verified (token active, debugMode: ${devDebugModeEnabled}).`
             );
           }
         })
         .catch((err) => {
-          void diagnoseDebugExchangeError(err).then((formatted) => {
-            const finalErr =
-              formatted ||
-              (err instanceof Error ? err.message : String(err || 'App Check authentication failed'));
-            console.warn('[Nimo] App Check verification status: FAILED ->', finalErr);
-            setAppCheckError(finalErr);
-          });
+          const formatted =
+            formatAppCheckExchangeError(err) ||
+            (err instanceof Error ? err.message : String(err || 'App Check authentication failed'));
+          console.warn('[Nimo] App Check verification status: FAILED ->', formatted);
+          setAppCheckError(formatted);
         });
     }
   } catch (err) {
@@ -303,11 +280,10 @@ if (typeof window !== 'undefined' && !appCheckInitialized) {
 export const appCheck = appCheckInstance;
 export const appCheckStatus: AppCheckStatus = detectedAppCheckStatus;
 
-// Firebase AI Logic SDK (must initialize after App Check so tokens attach automatically)
+// Protected Firebase services (initialized strictly AFTER App Check)
 export const ai = getAI(app, {
   backend: new GoogleAIBackend(),
 });
-
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();

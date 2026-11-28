@@ -218,7 +218,10 @@ service cloud.firestore {
         && existing().ownerId == request.auth.uid
         && incoming().ownerId == existing().ownerId
         && incoming().createdAt == existing().createdAt
-        && incoming().diff(existing()).affectedKeys().hasOnly(['mastered']);
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['mastered']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['term'])
+        );
       allow delete: if isValidId(itemId) && isSignedIn() && existing().ownerId == request.auth.uid;
     }
 
@@ -229,6 +232,12 @@ service cloud.firestore {
       allow create: if isValidId(noteId) && isVerifiedUser()
         && isValidStudyNote(incoming())
         && incoming().createdAt == request.time;
+      allow update: if isValidId(noteId) && isVerifiedUser()
+        && isValidStudyNote(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title']);
       allow delete: if isValidId(noteId) && isSignedIn() && existing().ownerId == request.auth.uid;
     }
 
@@ -239,6 +248,12 @@ service cloud.firestore {
       allow create: if isValidId(attemptId) && isVerifiedUser()
         && isValidQuizAttempt(incoming())
         && incoming().createdAt == request.time;
+      allow update: if isValidId(attemptId) && isVerifiedUser()
+        && isValidQuizAttempt(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['topic']);
       allow delete: if isValidId(attemptId) && isSignedIn() && existing().ownerId == request.auth.uid;
     }
 

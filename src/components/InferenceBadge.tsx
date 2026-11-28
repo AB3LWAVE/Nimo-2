@@ -40,7 +40,7 @@ export function InferenceBadge({ source, modelUsed, latencyMs }: InferenceBadgeP
               label: 'Firebase Cloud',
               sdkLabel: 'IN_CLOUD',
               icon: <Cloud className="w-3 h-3" />,
-              cls: 'border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300',
+              cls: 'border-orange-200 dark:border-orange-800/80 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300',
             };
 
   return (

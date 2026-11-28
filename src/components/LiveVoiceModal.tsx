@@ -272,7 +272,7 @@ export function LiveVoiceModal({
       aria-modal="true"
       aria-labelledby="live-voice-title"
     >
-      <div className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg overflow-hidden">
+      <div className="w-full max-w-xl bg-white dark:bg-[#161C24] border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h3
@@ -310,7 +310,7 @@ export function LiveVoiceModal({
 
           <div className="flex items-center justify-between px-4 py-3 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800">
             <div className="flex items-center gap-3">
-              <Volume2 className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+              <Volume2 className="w-4 h-4 text-orange-600 dark:text-amber-400" />
               <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
                 {status === 'connecting' && 'Connecting microphone & live audio stream...'}
                 {status === 'connected' && (muted ? 'Microphone muted' : 'Listening — speak naturally')}
@@ -322,7 +322,7 @@ export function LiveVoiceModal({
               {[0.3, 0.6, 1, 0.7, 0.4].map((scale, i) => (
                 <span
                   key={i}
-                  className="w-1 rounded-full bg-sky-600 dark:bg-sky-400 transition-all duration-75"
+                  className="w-1 rounded-full bg-orange-500 dark:bg-amber-400 transition-all duration-75"
                   style={{
                     height: `${Math.max(4, Math.round(micLevel * 20 * scale))}px`,
                   }}

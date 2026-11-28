@@ -30,6 +30,7 @@ import {
 } from './firebase';
 import {
   getHybridRuntimeStatus,
+  normalizeInferenceMode,
   subscribeHybridRuntimeStatus,
 } from './services/hybridAi';
 import {
@@ -44,6 +45,11 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { HybridSettingsModal } from './components/HybridSettingsModal';
 import { LearnSession } from './components/LearnSession';
 import { logAppCheckDebugReport } from './utils/appCheckDebug';
+import {
+  DRAFT_STORAGE_KEYS,
+  readDraft,
+  useAutoSaveDraft,
+} from './utils/draftStorage';
 
 const SESSIONS: Array<{ id: SessionTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
@@ -51,21 +57,43 @@ const SESSIONS: Array<{ id: SessionTab; label: string }> = [
   { id: 'create', label: 'Create' },
 ];
 
+function isValidSessionTab(value: unknown): value is SessionTab {
+  return value === 'chat' || value === 'learn' || value === 'create';
+}
+
 export default function App() {
-  const [activeSession, setActiveSession] = useState<SessionTab>('chat');
+  const [initialAppDraft] = useState(() =>
+    readDraft(DRAFT_STORAGE_KEYS.app, {
+      activeSession: 'chat' as SessionTab,
+      inferenceMode: 'prefer_on_device' as InferenceModePreference,
+    })
+  );
+
+  const [activeSession, setActiveSession] = useState<SessionTab>(() =>
+    isValidSessionTab(initialAppDraft.activeSession)
+      ? initialAppDraft.activeSession
+      : 'chat'
+  );
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(false);
 
-  const [inferenceMode, setInferenceMode] =
-    useState<InferenceModePreference>('prefer_on_device');
+  const [inferenceMode, setInferenceMode] = useState<InferenceModePreference>(() =>
+    normalizeInferenceMode(initialAppDraft.inferenceMode)
+  );
   const [hybridStatus, setHybridStatus] = useState<HybridRuntimeStatus>(() =>
     getHybridRuntimeStatus()
   );
   const [hybridSettingsOpen, setHybridSettingsOpen] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [appCheckErrorDismissed, setAppCheckErrorDismissed] = useState(false);
+
+  useAutoSaveDraft(
+    DRAFT_STORAGE_KEYS.app,
+    { activeSession, inferenceMode },
+    150
+  );
 
   useEffect(() => {
     return subscribeHybridRuntimeStatus(setHybridStatus);
@@ -172,30 +200,61 @@ export default function App() {
     }
   };
 
+  const isLocalActive =
+    hybridStatus.online &&
+    hybridStatus.deviceModelReady &&
+    (inferenceMode === 'prefer_on_device' || inferenceMode === 'only_on_device');
+
+  const isLocalUnavailable =
+    hybridStatus.onDeviceAvailability === 'unavailable' ||
+    hybridStatus.onDeviceAvailability === 'unsupported';
+
   const hybridSummaryText = !hybridStatus.online
+    ? inferenceMode === 'only_on_device' && hybridStatus.deviceModelReady
+      ? 'On-Device (Offline)'
+      : 'Offline'
+    : isLocalActive
+      ? 'On-Device AI'
+      : inferenceMode === 'only_on_device'
+        ? hybridStatus.deviceModelReady
+          ? 'On-Device Only'
+          : 'Local Unready'
+        : isLocalUnavailable
+          ? 'Cloud AI (Local Unavailable)'
+          : hybridStatus.onDeviceAvailability === 'downloadable'
+            ? 'Cloud AI (Local Ready)'
+            : hybridStatus.lastInferenceSource === 'ON_DEVICE'
+              ? 'On-Device AI'
+              : 'Cloud AI';
+
+  const hybridShortText = !hybridStatus.online
     ? 'Offline'
-    : hybridStatus.deviceModelReady
-      ? 'On-device ready'
-      : hybridStatus.onDeviceAvailability === 'downloadable'
-        ? 'Download local model'
-        : 'Cloud fallback';
+    : isLocalActive
+      ? 'On-Device'
+      : isLocalUnavailable
+        ? 'Cloud AI'
+        : 'Hybrid';
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+      <div className="h-[100dvh] flex flex-col overflow-hidden bg-[#F8F9FB] dark:bg-[#0F1419] text-slate-900 dark:text-slate-100">
         {/* Three-Zone Top Bar Contract — Strictly 3 Main Sections: Chat, Learn, Create */}
-        <header className="h-16 px-4 sm:px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4 sm:gap-8 sticky top-0 z-30">
+        <header className="h-16 shrink-0 px-3 sm:px-6 lg:px-8 bg-white/95 dark:bg-[#161C24]/95 backdrop-blur-xs border-b border-slate-200/90 dark:border-slate-800 flex items-center justify-between gap-2 sm:gap-6 z-30">
           {/* Zone 1: Single-line Brand Wordmark */}
           <button
             type="button"
             onClick={() => setActiveSession('chat')}
-            className="text-lg sm:text-xl font-bold font-display tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-2 text-lg sm:text-xl font-bold font-display tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
           >
-            Nimo
+            <span
+              aria-hidden="true"
+              className="w-2.5 h-2.5 rounded-sm bg-gradient-to-br from-[#FFCA28] via-[#FF9100] to-[#F57C00] shadow-xs"
+            />
+            <span>Nimo</span>
           </button>
 
           {/* Zone 2: Exactly 3 Primary Navigation Sections (Chat, Learn, Create) */}
-          <nav aria-label="Primary sessions" className="flex items-center gap-5 sm:gap-8 h-full">
+          <nav aria-label="Primary sessions" className="flex items-center gap-4 sm:gap-8 h-full">
             {SESSIONS.map((tab) => {
               const active = activeSession === tab.id;
               return (
@@ -206,7 +265,7 @@ export default function App() {
                   onClick={() => setActiveSession(tab.id)}
                   className={`relative h-full inline-flex items-center text-sm font-medium transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                     active
-                      ? 'border-sky-600 text-slate-900 dark:text-white'
+                      ? 'border-orange-500 text-slate-900 dark:text-white'
                       : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
@@ -216,41 +275,45 @@ export default function App() {
             })}
           </nav>
 
-          {/* Zone 3: Hybrid Runtime Control, Privacy, Theme & Account Action */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Zone 3: Account (Armor/Shield) Icon + Hybrid Setup Control immediately beside it */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => setHybridSettingsOpen(true)}
-              aria-label="Open Hybrid AI runtime settings"
-              className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
+              onClick={() => setPrivacyOpen(true)}
+              aria-label="Account, privacy, and data controls"
+              title="Account & Privacy Controls"
+              className="p-2 rounded-lg border border-slate-200 dark:border-slate-700/90 text-slate-600 dark:text-slate-300 hover:border-orange-300 dark:hover:border-orange-700 hover:bg-orange-50/60 dark:hover:bg-orange-950/30 transition-colors"
             >
-              {!hybridStatus.online ? (
-                <WifiOff className="w-3.5 h-3.5 text-amber-500" />
-              ) : (
-                <Cpu
-                  className={`w-3.5 h-3.5 ${
-                    hybridStatus.deviceModelReady ? 'text-emerald-500' : 'text-sky-500'
-                  }`}
-                />
-              )}
-              <span>{hybridSummaryText}</span>
+              <Shield className="w-4 h-4 text-orange-600 dark:text-amber-400" />
             </button>
 
             <button
               type="button"
-              onClick={() => setPrivacyOpen(true)}
-              aria-label="Privacy and account data controls"
-              title="Privacy & Data Controls"
-              className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              onClick={() => setHybridSettingsOpen(true)}
+              aria-label={`Hybrid AI Setup: ${hybridSummaryText}. Click to configure.`}
+              title={`Hybrid AI Setup · ${hybridSummaryText}`}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700/90 bg-slate-50/80 dark:bg-slate-800/70 text-slate-700 dark:text-slate-200 hover:border-orange-300 dark:hover:border-orange-700 hover:bg-orange-50/60 dark:hover:bg-orange-950/30 transition-colors whitespace-nowrap"
             >
-              <Shield className="w-4 h-4" />
+              {!hybridStatus.online ? (
+                <WifiOff className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              ) : (
+                <Cpu
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    isLocalActive
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-orange-500 dark:text-amber-400'
+                  }`}
+                />
+              )}
+              <span className="hidden md:inline">{hybridSummaryText}</span>
+              <span className="md:hidden">{hybridShortText}</span>
             </button>
 
             <button
               type="button"
               onClick={toggleTheme}
               aria-label={darkMode ? 'Switch to light theme' : 'Switch to dark theme'}
-              className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="p-2 rounded-lg border border-slate-200 dark:border-slate-700/90 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
@@ -258,7 +321,7 @@ export default function App() {
             {!authReady ? (
               <span className="text-xs text-slate-400 whitespace-nowrap">Loading...</span>
             ) : user ? (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2">
                 {user.photoURL && (
                   <img
                     src={user.photoURL}
@@ -267,7 +330,7 @@ export default function App() {
                     className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700"
                   />
                 )}
-                <span className="hidden sm:inline text-xs font-medium text-slate-700 dark:text-slate-200 max-w-[110px] truncate">
+                <span className="hidden xl:inline text-xs font-medium text-slate-700 dark:text-slate-200 max-w-[110px] truncate">
                   {user.displayName || 'Learner'}
                 </span>
                 <button
@@ -283,7 +346,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleSignIn}
-                className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium rounded-lg bg-slate-900 dark:bg-sky-600 hover:bg-slate-800 dark:hover:bg-sky-700 text-white transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium rounded-lg bg-slate-900 dark:bg-orange-600 hover:bg-slate-800 dark:hover:bg-orange-500 text-white transition-colors whitespace-nowrap shrink-0"
               >
                 <LogIn className="w-3.5 h-3.5" />
                 <span>Sign in</span>
@@ -318,13 +381,12 @@ export default function App() {
           </div>
         )}
 
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {activeSession === 'chat' && (
             <ChatSession
               user={user}
               onRequireSignIn={handleSignIn}
               inferenceMode={inferenceMode}
-              onInferenceModeChange={setInferenceMode}
               onOpenHybridSettings={() => setHybridSettingsOpen(true)}
             />
           )}
@@ -333,7 +395,6 @@ export default function App() {
               user={user}
               onRequireSignIn={handleSignIn}
               inferenceMode={inferenceMode}
-              onOpenHybridSettings={() => setHybridSettingsOpen(true)}
             />
           )}
           {activeSession === 'create' && (

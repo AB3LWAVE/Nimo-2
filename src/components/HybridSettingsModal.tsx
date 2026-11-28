@@ -93,12 +93,15 @@ export function HybridSettingsModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-3 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="hybrid-settings-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg overflow-hidden max-h-[90vh] flex flex-col">
+      <div className="w-full max-w-2xl bg-white dark:bg-[#161C24] border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl overflow-hidden max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h2
@@ -116,13 +119,13 @@ export function HybridSettingsModal({
             type="button"
             onClick={onClose}
             aria-label="Close Hybrid Runtime settings"
-            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-500"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-5 space-y-5 overflow-y-auto">
+        <div className="p-5 space-y-5 overflow-y-auto scroll-smooth">
           {/* Runtime Telemetry Grid */}
           <div className="grid sm:grid-cols-2 gap-3">
             <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-1">
@@ -137,7 +140,7 @@ export function HybridSettingsModal({
 
             <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-1">
               <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-                <Cloud className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+                <Cloud className="w-3.5 h-3.5 text-orange-600 dark:text-amber-400" />
                 <span>Cloud Fallback Model</span>
               </div>
               <p className="text-sm font-mono font-medium text-slate-900 dark:text-white">
@@ -161,7 +164,7 @@ export function HybridSettingsModal({
 
             <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-1">
               <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-                <ShieldCheck className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+                <ShieldCheck className="w-3.5 h-3.5 text-orange-600 dark:text-amber-400" />
                 <span>Firebase App Check</span>
               </div>
               <p className="text-xs font-medium text-slate-900 dark:text-white">
@@ -212,7 +215,7 @@ export function HybridSettingsModal({
                   type="button"
                   onClick={() => void initializeOnDeviceModel()}
                   disabled={status.isDownloading || !status.browserSupported}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white whitespace-nowrap"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white whitespace-nowrap"
                 >
                   {status.deviceModelReady ? (
                     <CheckCircle2 className="w-3.5 h-3.5" />
@@ -262,7 +265,7 @@ export function HybridSettingsModal({
                     onClick={() => onModeChange(opt.id)}
                     className={`text-left p-3.5 rounded-xl border transition-colors ${
                       selected
-                        ? 'border-sky-600 bg-sky-50 dark:bg-sky-950/40'
+                        ? 'border-orange-500 bg-orange-50/80 dark:bg-orange-950/35'
                         : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
                     }`}
                   >

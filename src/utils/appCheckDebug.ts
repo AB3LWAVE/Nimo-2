@@ -49,19 +49,6 @@ function readCleanEnv(value: unknown): string | null {
   return cleaned || null;
 }
 
-function detectDevOrPreviewHost(hostname: string, isDev: boolean): boolean {
-  return (
-    isDev ||
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname.startsWith('ais-dev-') ||
-    hostname === 'scf.usercontent.goog' ||
-    hostname.endsWith('.scf.usercontent.goog') ||
-    hostname === 'aistudio.google.com' ||
-    hostname.endsWith('.aistudio.google.com')
-  );
-}
-
 function readLocalStorageDebugToken(): string | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -96,7 +83,7 @@ export function getAppCheckDebugReport(): AppCheckDebugReport {
       mode,
       hostname,
       origin,
-      isDevOrPreviewHost: detectDevOrPreviewHost(hostname, isDev),
+      isDevOrPreviewHost: isDev,
     },
     appCheck: {
       initialized: Boolean(appCheck),
@@ -106,9 +93,7 @@ export function getAppCheckDebugReport(): AppCheckDebugReport {
     debugTokens: {
       globalSelfToken,
       viteAppCheckDebugToken: readCleanEnv(env.VITE_APPCHECK_DEBUG_TOKEN),
-      viteFirebaseAppCheckDebugToken: readCleanEnv(
-        env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN
-      ),
+      viteFirebaseAppCheckDebugToken: null,
       localStorageToken: readLocalStorageDebugToken(),
     },
     recaptchaConfig: {
@@ -130,7 +115,8 @@ export function getAppCheckDebugReport(): AppCheckDebugReport {
     },
     exchangeDebugTokenEndpoint: `https://content-firebaseappcheck.googleapis.com/v1/projects/${firebaseConfig.projectId}/apps/${firebaseConfig.appId}:exchangeDebugToken`,
     troubleshootingHints: [
-      `Confirm the active debug token UUID is registered under Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId} -> Manage debug tokens.`,
+      `In development mode, Firebase prints "Firebase App Check debug token: <UUID>" to the browser console (stored in IndexedDB under firebase-app-check-store).`,
+      `Register that exact UUID under Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId} -> Manage debug tokens, then refresh the page.`,
       `Check Google Cloud Console -> APIs & Services -> Credentials for API key "${firebaseConfig.apiKey}" (verify HTTP referrer allowlist includes "${origin}" and Firebase App Check API is permitted).`,
       `Verify Firebase App Check API (firebaseappcheck.googleapis.com) is enabled on project "${firebaseConfig.projectId}".`,
     ],
