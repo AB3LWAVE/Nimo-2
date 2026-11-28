@@ -760,7 +760,7 @@ export function CreateSession({
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-orange-600 dark:text-amber-400" />
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-              Create History
+              Chat History
             </span>
           </div>
           <div className="flex items-center gap-1">
