@@ -100,7 +100,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    logAppCheckDebugReport();
+    if (import.meta.env.DEV || hybridStatus.appCheckError) {
+      void logAppCheckDebugReport();
+    }
   }, [hybridStatus.appCheckError]);
 
   useEffect(() => {

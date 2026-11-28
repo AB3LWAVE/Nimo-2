@@ -1,3 +1,4 @@
+import { appCheckDevSetupState } from './appCheckDevSetup';
 import { initializeApp } from 'firebase/app';
 import { getAI, GoogleAIBackend } from 'firebase/ai';
 import {
@@ -30,40 +31,8 @@ import type { AppCheckStatus } from './types';
 const DEFAULT_PUBLIC_RECAPTCHA_ENTERPRISE_KEY =
   '6Ldp2CwuAAAAAMzBAZAW1VKn7gSm3zycawyAyzGF';
 
-const IS_DEV_MODE = import.meta.env ? import.meta.env.DEV : false;
-
-// Development-only: assign FIREBASE_APPCHECK_DEBUG_TOKEN synchronously BEFORE initializeApp / initializeAppCheck.
-// In production builds (`import.meta.env.DEV === false`), this branch is stripped and FIREBASE_APPCHECK_DEBUG_TOKEN is never set.
-let devDebugModeEnabled = false;
-if (typeof window !== 'undefined') {
-  if (IS_DEV_MODE) {
-    const rawEnvDebugToken = String(
-      (import.meta.env ? import.meta.env.VITE_APPCHECK_DEBUG_TOKEN : '') ?? ''
-    )
-      .trim()
-      .replace(/^["']|["']$/g, '')
-      .trim();
-    const debugTokenSetting: string | boolean = rawEnvDebugToken || true;
-    (
-      self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }
-    ).FIREBASE_APPCHECK_DEBUG_TOKEN = debugTokenSetting;
-    devDebugModeEnabled = true;
-
-    if (debugTokenSetting === true) {
-      console.info(
-        `[Nimo] App Check development debug mode enabled (self.FIREBASE_APPCHECK_DEBUG_TOKEN = true). Look for "Firebase App Check debug token: <UUID>" in the console and register it under Firebase Console -> App Check -> Apps -> ${firebaseConfig.appId} -> Manage debug tokens.`
-      );
-    } else {
-      console.info(
-        `[Nimo] App Check development debug mode enabled using VITE_APPCHECK_DEBUG_TOKEN for web app ${firebaseConfig.appId}.`
-      );
-    }
-  } else {
-    console.info(
-      `[Nimo] App Check production mode active (host="${window.location.hostname}"). Debug token disabled.`
-    );
-  }
-}
+const IS_DEV_MODE = appCheckDevSetupState.isDevMode;
+const devDebugModeEnabled = appCheckDevSetupState.debugModeActive;
 
 const app = initializeApp(firebaseConfig);
 
